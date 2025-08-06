@@ -125,8 +125,7 @@ sudo ./tun_bridge --mode client --remote-ip server.com --port 443 --local-tun-ip
 ### Auto-Install with systemd
 ```bash
 # Install and configure automatically
-sudo scripts/install_systemd.sh
-scripts/configure_service.sh
+make configure
 
 # Start services
 sudo systemctl start tun-bridge        # Server mode
