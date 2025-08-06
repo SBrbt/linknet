@@ -19,7 +19,8 @@ public:
     bool create_tun(const std::string& dev_name);
     
     // Configure TUN interface with IP
-    bool configure_interface(const std::string& local_ip, 
+    bool configure_interface(const std::string& local_ip,
+                            const std::string& remote_ip,
                            const std::string& netmask = "255.255.255.0");
     
     // Read packet from TUN interface
