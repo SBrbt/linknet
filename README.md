@@ -36,7 +36,7 @@ A simple and secure C++ tool that creates encrypted point-to-point network tunne
 
 ### 1. Build
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/SBrbt/linknet.git
 cd linknet
 make
 ```
