@@ -41,15 +41,15 @@ print_error() {
 }
 
 # Check if binary exists
-if [ ! -f "./tun_bridge" ]; then
-    print_error "tun_bridge binary not found in current directory"
+if [ ! -f "../tun_bridge" ]; then
+    print_error "tun_bridge binary not found in parent directory"
     echo "Please run 'make' to build the project first"
     exit 1
 fi
 
 # Install binary
 print_status "Installing binary to $BINARY_PATH"
-cp ./tun_bridge "$BINARY_PATH"
+cp ../tun_bridge "$BINARY_PATH"
 chmod +x "$BINARY_PATH"
 
 # Create config directory
@@ -70,52 +70,58 @@ print_status "Creating example configuration files"
 
 cat > "$CONFIG_DIR/server.conf" << EOF
 # TUN Bridge Server Configuration
-# Copy this file and modify as needed
+# Edit the service file to use these values
 
 # Network settings
+DEV_NAME="tun0"
 LOCAL_IP="10.0.1.1"
-REMOTE_IP="10.0.1.2"
+REMOTE_TUN_IP="10.0.1.2"
 NETMASK="255.255.255.0"
 
 # Server settings
-PORT="8080"
+PORT="51860"
 
-# Routes (comma-separated CIDR blocks)
-ROUTES="192.168.1.0/24,10.0.0.0/8"
+# Enable routing for remote IP
+ENABLE_ROUTE="yes"
 
-# PSK file path (optional, for encryption)
+# PSK file path (required for encryption)
 PSK_FILE="/etc/tun-bridge/bridge.psk"
 
-# Log level (DEBUG, INFO, WARNING, ERROR)
-LOG_LEVEL="INFO"
+# Example command:
+# /usr/local/bin/tun_bridge --mode server --dev tun0 --port 51860 \\
+#   --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\
+#   --psk-file /etc/tun-bridge/bridge.psk --enable-route
 EOF
 
 cat > "$CONFIG_DIR/client.conf" << EOF
 # TUN Bridge Client Configuration
-# Copy this file and modify as needed
+# Edit the service file to use these values
 
 # Network settings
+DEV_NAME="tun0"
 LOCAL_IP="10.0.1.2"
-REMOTE_IP="10.0.1.1"
+REMOTE_TUN_IP="10.0.1.1"
 NETMASK="255.255.255.0"
 
 # Server connection
 SERVER_HOST="SERVER_IP_HERE"
-PORT="8080"
+PORT="51860"
 
-# Routes (comma-separated CIDR blocks)
-ROUTES="192.168.2.0/24,172.16.0.0/12"
+# Enable routing for remote IP
+ENABLE_ROUTE="yes"
 
-# PSK file path (optional, for encryption)
+# PSK file path (required for encryption)
 PSK_FILE="/etc/tun-bridge/bridge.psk"
 
-# Log level (DEBUG, INFO, WARNING, ERROR)
-LOG_LEVEL="INFO"
+# Example command:
+# /usr/local/bin/tun_bridge --mode client --dev tun0 --remote-ip SERVER_IP \\
+#   --port 51860 --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\
+#   --psk-file /etc/tun-bridge/bridge.psk --enable-route
 EOF
 
 # Generate sample PSK
 print_status "Generating sample PSK file"
-if [ -f "./tun_bridge" ]; then
+if [ -f "$BINARY_PATH" ]; then
     "$BINARY_PATH" --generate-psk > "$CONFIG_DIR/bridge.psk.example"
     chmod 600 "$CONFIG_DIR/bridge.psk.example"
     print_warning "Sample PSK generated at $CONFIG_DIR/bridge.psk.example"

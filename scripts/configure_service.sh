@@ -28,10 +28,9 @@ print_warning() {
 MODE=""
 LOCAL_IP=""
 REMOTE_IP=""
-PORT="8080"
-ROUTES=""
+PORT="51860"
 PSK_FILE=""
-EXTRA_ARGS=""
+ENABLE_ROUTE="no"
 
 # Interactive configuration
 echo "This script will help you generate a customized systemd service file."
@@ -44,8 +43,8 @@ while [[ "$MODE" != "server" && "$MODE" != "client" ]]; do
 done
 
 # Network configuration
-read -p "Local IP address (e.g., 10.0.1.1): " LOCAL_IP
-read -p "Remote IP address (e.g., 10.0.1.2): " REMOTE_IP
+read -p "Local TUN IP address (e.g., 10.0.1.1): " LOCAL_IP
+read -p "Remote TUN IP address (e.g., 10.0.1.2): " REMOTE_IP
 
 if [ "$MODE" = "server" ]; then
     read -p "Listen port [$PORT]: " INPUT_PORT
@@ -56,7 +55,7 @@ else
     PORT=${INPUT_PORT:-$PORT}
 fi
 
-read -p "Routes (comma-separated CIDR, e.g., 192.168.1.0/24,10.0.0.0/8): " ROUTES
+read -p "Enable routing for remote-ip? [y/N]: " ENABLE_ROUTE
 read -p "PSK file path (optional, for encryption): " PSK_FILE
 
 # Generate service file
@@ -82,16 +81,16 @@ Group=root
 EOF
 
 # Build ExecStart command
-EXEC_START="/usr/local/bin/tun_bridge --$MODE"
+EXEC_START="/usr/local/bin/tun_bridge --mode $MODE"
 
 if [ "$MODE" = "client" ]; then
-    EXEC_START="$EXEC_START --host $SERVER_HOST"
+    EXEC_START="$EXEC_START --remote-ip $SERVER_HOST"
 fi
 
-EXEC_START="$EXEC_START --port $PORT --ip $LOCAL_IP --remote-ip $REMOTE_IP"
+EXEC_START="$EXEC_START --port $PORT --dev tun0 --local-ip $LOCAL_IP --remote-tun-ip $REMOTE_IP"
 
-if [ -n "$ROUTES" ]; then
-    EXEC_START="$EXEC_START --routes \"$ROUTES\""
+if [[ "$ENABLE_ROUTE" =~ ^[Yy] ]]; then
+    EXEC_START="$EXEC_START --enable-route"
 fi
 
 if [ -n "$PSK_FILE" ]; then

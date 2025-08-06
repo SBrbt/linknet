@@ -42,7 +42,7 @@ void print_usage(const char* program_name) {
     std::cout << "Options:\n";
     std::cout << "  --mode MODE         Operation mode: 'client' or 'server' (required)\n";
     std::cout << "  --dev DEVICE        TUN device name (default: tun0)\n";
-    std::cout << "  --port PORT         TCP port (default: 9000)\n";
+    std::cout << "  --port PORT         TCP port (default: 51860)\n";
     std::cout << "  --remote-ip IP      Remote server IP (required for client mode)\n";
     std::cout << "  --local-ip IP       Local TUN IP address (required)\n";
     std::cout << "  --remote-tun-ip IP  Remote TUN IP address (required)\n";
@@ -50,18 +50,17 @@ void print_usage(const char* program_name) {
     std::cout << "  --psk-file FILE     Read pre-shared key from file\n";
     std::cout << "  --no-encryption     Disable encryption (not recommended)\n";
     std::cout << "  --generate-psk      Generate a random pre-shared key\n";
-    std::cout << "  --route NETWORK     Add network route through TUN (e.g., 192.168.1.0/24)\n";
-    std::cout << "  --route-all         Route all traffic through TUN (full VPN mode)\n";
+    std::cout << "  --enable-route      Route remote-ip through TUN interface\n";
     std::cout << "  --help              Show this help message\n\n";
     std::cout << "Examples:\n";
     std::cout << "  Server mode:\n";
-    std::cout << "    sudo " << program_name << " --mode server --dev tun0 --port 9000 \\\n";
-    std::cout << "                        --local-ip 10.0.0.1 --remote-tun-ip 10.0.0.2 \\\n";
-    std::cout << "                        --psk \"your-secret-key-here\" --route 192.168.1.0/24\n\n";
+    std::cout << "    sudo " << program_name << " --mode server --dev tun0 --port 51860 \\\n";
+    std::cout << "                        --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\\n";
+    std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
     std::cout << "  Client mode:\n";
     std::cout << "    sudo " << program_name << " --mode client --dev tun0 --remote-ip 1.2.3.4 \\\n";
-    std::cout << "                        --port 9000 --local-ip 10.0.0.2 --remote-tun-ip 10.0.0.1 \\\n";
-    std::cout << "                        --psk \"your-secret-key-here\" --route 10.10.0.0/16\n\n";
+    std::cout << "                        --port 51860 --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\\n";
+    std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
 }
 
 bool parse_arguments(int argc, char* argv[], Config& config) {
@@ -74,8 +73,7 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
         {"remote-tun-ip", required_argument, 0, 't'},
         {"psk", required_argument, 0, 'k'},
         {"psk-file", required_argument, 0, 'f'},
-        {"route", required_argument, 0, 'R'},
-        {"route-all", no_argument, 0, 'A'},
+        {"enable-route", no_argument, 0, 'R'},
         {"no-encryption", no_argument, 0, 'n'},
         {"generate-psk", no_argument, 0, 'g'},
         {"help", no_argument, 0, 'h'},
@@ -85,7 +83,7 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
     int option_index = 0;
     int c;
     
-    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:R:Angh", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:Rngh", long_options, &option_index)) != -1) {
         switch (c) {
             case 'm':
                 config.mode = optarg;
@@ -112,19 +110,13 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
                 config.psk_file = optarg;
                 break;
             case 'R':
-                config.route_networks.push_back(optarg);
-                config.enable_auto_route = true;
-                break;
-            case 'A':
-                config.route_networks.push_back("0.0.0.0/1");
-                config.route_networks.push_back("128.0.0.0/1");
                 config.enable_auto_route = true;
                 break;
             case 'n':
                 config.enable_encryption = false;
                 break;
             case 'g':
-                std::cout << "Generated PSK: " << CryptoManager::generate_psk() << std::endl;
+                std::cout << CryptoManager::generate_psk() << std::endl;
                 return false;
             case 'h':
                 print_usage(argv[0]);
@@ -206,16 +198,6 @@ bool validate_config(Config& config) {
         }
     }
     
-    // Route validation
-    if (config.enable_auto_route) {
-        for (const auto& network : config.route_networks) {
-            if (!RouteManager::is_valid_cidr(network)) {
-                Logger::log(LogLevel::ERROR, "Invalid network CIDR: " + network);
-                return false;
-            }
-        }
-    }
-    
     return true;
 }
 
@@ -234,11 +216,8 @@ void print_config(const Config& config) {
     if (config.enable_encryption && !config.psk.empty()) {
         Logger::log(LogLevel::INFO, "  PSK Length: " + std::to_string(config.psk.length()) + " characters");
     }
-    if (config.enable_auto_route && !config.route_networks.empty()) {
-        Logger::log(LogLevel::INFO, "  Route Networks:");
-        for (const auto& network : config.route_networks) {
-            Logger::log(LogLevel::INFO, "    - " + network);
-        }
+    if (config.enable_auto_route) {
+        Logger::log(LogLevel::INFO, "  Will route remote-ip (" + config.remote_tun_ip + ") through TUN interface");
     }
 }
 
@@ -343,17 +322,20 @@ int main(int argc, char* argv[]) {
         
         // Set up routing if enabled
         if (config.enable_auto_route) {
-            Logger::log(LogLevel::INFO, "Setting up automatic routing...");
+            Logger::log(LogLevel::INFO, "Setting up automatic routing for remote IP...");
             
             if (!route_manager.initialize(config.dev_name, config.remote_tun_ip)) {
                 Logger::log(LogLevel::ERROR, "Failed to initialize route manager");
                 return 1;
             }
             
-            if (!route_manager.add_tun_routes(config.route_networks)) {
-                Logger::log(LogLevel::WARNING, "Some routes failed to configure");
+            // Create a single route for the remote TUN IP
+            std::vector<std::string> route_target = {config.remote_tun_ip + "/32"};
+            
+            if (!route_manager.add_tun_routes(route_target)) {
+                Logger::log(LogLevel::WARNING, "Failed to configure route for remote IP");
             } else {
-                Logger::log(LogLevel::INFO, "All routes configured successfully");
+                Logger::log(LogLevel::INFO, "Route configured successfully for " + config.remote_tun_ip);
             }
             
             // Print current routing table for verification

@@ -26,17 +26,13 @@ $(BUILD_DIR)/%.o: $(SRCDIR)/%.cpp | $(BUILD_DIR)
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
-# install as systemd service
-install: $(TARGET)
-	./scripts/install_service.sh
-
-# uninstall service
-uninstall: $(TARGET)
-	./scripts/uninstall_service.sh
-
-# configure service
-configure: $(TARGET)
+# setup systemd service
+setup: $(TARGET)
 	./scripts/configure_service.sh
+
+# remove service
+remove: $(TARGET)
+	./scripts/uninstall_service.sh
 
 # Clean build artifacts
 clean:

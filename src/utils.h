@@ -95,11 +95,10 @@ struct Config {
     std::string psk_file;      // PSK file path
     
     // Routing settings
-    bool enable_auto_route;     // Enable automatic routing
-    std::vector<std::string> route_networks;  // Networks to route through TUN
+    bool enable_auto_route;     // Enable automatic routing for remote-ip
     std::string default_route_interface;      // Save original default route interface
     
-    Config() : port(9000), netmask("255.255.255.0"), 
+    Config() : port(51860), netmask("255.255.255.0"), 
                enable_keepalive(true), reconnect_interval(5),
                enable_encryption(true), enable_auto_route(false) {}
 };
