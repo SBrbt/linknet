@@ -45,7 +45,6 @@ bool TunManager::create_tun(const std::string& dev_name) {
 }
 
 bool TunManager::configure_interface(const std::string& local_ip, 
-                                    const std::string& remote_ip,
                                     const std::string& netmask) {
     if (!is_open) {
         Logger::log(LogLevel::ERROR, "TUN interface not open");
@@ -69,11 +68,7 @@ bool TunManager::configure_interface(const std::string& local_ip,
         return false;
     }
     
-    // Add route to remote peer (point-to-point)
-    if (!remote_ip.empty()) {
-        cmd = "ip route add " + remote_ip + "/32 dev " + dev_name;
-        execute_command(cmd);  // This might fail if route exists, that's OK
-    }
+    // Note: Point-to-point routing is handled by RouteManager to avoid conflicts
     
     Logger::log(LogLevel::INFO, "TUN interface configured: " + dev_name + 
                " with IP " + local_ip);

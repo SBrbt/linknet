@@ -164,8 +164,9 @@ scp tunnel.key user@other-machine:/path/to/tunnel.key
 - Use unique keys for each tunnel
 - Restrict port access with firewall rules
 - Monitor logs for connection attempts
-4. **Regular Rotation**: Rotate PSKs periodically (recommended monthly)
-5. **Monitoring**: Monitor tunnel traffic and connection logs
+
+### Route Optimization
+LinkNet automatically detects when kernel-generated routes already cover the target destination and skips adding redundant routes. For example, if the TUN interface creates a `10.0.1.0/24` route, LinkNet won't add a redundant `10.0.1.1/32` route.
 ## �️ Troubleshooting
 
 ### Connection Issues

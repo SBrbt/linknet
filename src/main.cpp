@@ -262,7 +262,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Configure TUN interface
-    if (!tun_manager.configure_interface(config.local_ip, config.remote_tun_ip)) {
+    if (!tun_manager.configure_interface(config.local_ip)) {
         Logger::log(LogLevel::ERROR, "Failed to configure TUN interface");
         return 1;
     }

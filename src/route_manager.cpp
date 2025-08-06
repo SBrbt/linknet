@@ -143,21 +143,29 @@ bool RouteManager::restore_original_routes() {
     }
     added_routes.clear();
     
-    // Restore original routes
+    // Restore original routes (only if they don't already exist)
     for (const auto& route : original_routes) {
-        std::string cmd = "ip route add " + route.network;
-        if (!route.gateway.empty() && route.gateway != "0.0.0.0") {
-            cmd += " via " + route.gateway;
+        // Check if route already exists before restoring
+        if (!route_exists(route.network)) {
+            std::string cmd = "ip route add " + route.network;
+            if (!route.gateway.empty() && route.gateway != "0.0.0.0") {
+                cmd += " via " + route.gateway;
+            }
+            if (!route.interface.empty()) {
+                cmd += " dev " + route.interface;
+            }
+            if (route.metric > 0) {
+                cmd += " metric " + std::to_string(route.metric);
+            }
+            
+            if (execute_command(cmd)) {
+                Logger::log(LogLevel::DEBUG, "Restored route: " + route.network);
+            } else {
+                Logger::log(LogLevel::DEBUG, "Failed to restore route (may already exist): " + route.network);
+            }
+        } else {
+            Logger::log(LogLevel::DEBUG, "Route already exists, skipping restore: " + route.network);
         }
-        if (!route.interface.empty()) {
-            cmd += " dev " + route.interface;
-        }
-        if (route.metric > 0) {
-            cmd += " metric " + std::to_string(route.metric);
-        }
-        
-        execute_command(cmd);
-        Logger::log(LogLevel::DEBUG, "Restored route: " + route.network);
     }
     
     original_routes.clear();
@@ -277,18 +285,24 @@ bool RouteManager::has_covering_route(const std::string& network_cidr) {
     while (std::getline(iss, line)) {
         if (line.empty()) continue;
         
-        // Parse each route line
+        // Parse each route line - handle different formats
         std::istringstream line_iss(line);
         std::string route_network;
         if (line_iss >> route_network) {
+            // If the route doesn't have a slash, it might be a host route or implicit /32
+            if (route_network.find('/') == std::string::npos) {
+                // Skip individual host routes that aren't network blocks
+                continue;
+            }
+            
             // Check if this route covers our target
             std::string existing_network;
             int existing_prefix;
             if (parse_cidr(route_network, existing_network, existing_prefix)) {
                 // A route covers our target if:
-                // 1. It has a smaller or equal prefix (broader or equal coverage)
+                // 1. It has a smaller prefix (broader coverage)
                 // 2. The target IP falls within the existing network range
-                if (existing_prefix <= target_prefix && 
+                if (existing_prefix < target_prefix && 
                     ip_in_network(target_network, existing_network, existing_prefix)) {
                     Logger::log(LogLevel::DEBUG, "Found covering route: " + route_network + " covers " + network_cidr);
                     return true;
