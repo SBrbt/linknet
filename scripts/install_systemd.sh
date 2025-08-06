@@ -89,7 +89,7 @@ PSK_FILE="/etc/tun-bridge/bridge.psk"
 
 # Example command:
 # /usr/local/bin/tun_bridge --mode server --dev tun0 --port 51860 \\
-#   --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\
+#   --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\
 #   --psk-file /etc/tun-bridge/bridge.psk --enable-route
 EOF
 
@@ -115,7 +115,7 @@ PSK_FILE="/etc/tun-bridge/bridge.psk"
 
 # Example command:
 # /usr/local/bin/tun_bridge --mode client --dev tun0 --remote-ip SERVER_IP \\
-#   --port 51860 --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\
+#   --port 51860 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\
 #   --psk-file /etc/tun-bridge/bridge.psk --enable-route
 EOF
 

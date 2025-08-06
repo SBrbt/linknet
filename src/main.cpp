@@ -44,7 +44,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --dev DEVICE        TUN device name (default: tun0)\n";
     std::cout << "  --port PORT         TCP port (default: 51860)\n";
     std::cout << "  --remote-ip IP      Remote server IP (required for client mode)\n";
-    std::cout << "  --local-ip IP       Local TUN IP address (required)\n";
+    std::cout << "  --local-tun-ip IP   Local TUN IP address (required)\n";
     std::cout << "  --remote-tun-ip IP  Remote TUN IP address (required)\n";
     std::cout << "  --psk KEY           Pre-shared key for encryption (required)\n";
     std::cout << "  --psk-file FILE     Read pre-shared key from file\n";
@@ -55,11 +55,11 @@ void print_usage(const char* program_name) {
     std::cout << "Examples:\n";
     std::cout << "  Server mode:\n";
     std::cout << "    sudo " << program_name << " --mode server --dev tun0 --port 51860 \\\n";
-    std::cout << "                        --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\\n";
+    std::cout << "                        --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\\n";
     std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
     std::cout << "  Client mode:\n";
     std::cout << "    sudo " << program_name << " --mode client --dev tun0 --remote-ip 1.2.3.4 \\\n";
-    std::cout << "                        --port 51860 --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\\n";
+    std::cout << "                        --port 51860 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\\n";
     std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
 }
 
@@ -69,7 +69,7 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
         {"dev", required_argument, 0, 'd'},
         {"port", required_argument, 0, 'p'},
         {"remote-ip", required_argument, 0, 'r'},
-        {"local-ip", required_argument, 0, 'l'},
+        {"local-tun-ip", required_argument, 0, 'l'},
         {"remote-tun-ip", required_argument, 0, 't'},
         {"psk", required_argument, 0, 'k'},
         {"psk-file", required_argument, 0, 'f'},
@@ -151,9 +151,9 @@ bool validate_config(Config& config) {
         return false;
     }
     
-    // Check local IP
+    // Check local TUN IP
     if (config.local_ip.empty() || !NetworkUtils::is_valid_ip(config.local_ip)) {
-        Logger::log(LogLevel::ERROR, "Valid local IP address is required");
+        Logger::log(LogLevel::ERROR, "Valid local TUN IP address is required");
         return false;
     }
     

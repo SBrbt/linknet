@@ -49,7 +49,7 @@ make
 ### 3. Start Server (Machine with public IP)
 ```bash
 sudo ./tun_bridge --mode server \
-    --local-ip 10.0.1.1 \
+    --local-tun-ip 10.0.1.1 \
     --remote-tun-ip 10.0.1.2 \
     --psk-file tunnel.key \
     --enable-route
@@ -60,7 +60,7 @@ sudo ./tun_bridge --mode server \
 # Copy tunnel.key to this machine first
 sudo ./tun_bridge --mode client \
     --remote-ip <server-public-ip> \
-    --local-ip 10.0.1.2 \
+    --local-tun-ip 10.0.1.2 \
     --remote-tun-ip 10.0.1.1 \
     --psk-file tunnel.key \
     --enable-route
@@ -80,9 +80,9 @@ ping 10.0.1.1
 ### Required Parameters
 ```bash
 --mode client|server     # Operation mode
---local-ip IP           # This machine's tunnel IP
---remote-tun-ip IP      # Other machine's tunnel IP  
---psk-file FILE         # Encryption key file
+--local-tun-ip IP        # This machine's tunnel IP
+--remote-tun-ip IP       # Other machine's tunnel IP  
+--psk-file FILE          # Encryption key file
 ```
 
 ### Client-Only Parameters
@@ -105,19 +105,19 @@ ping 10.0.1.1
 #### Standard Setup
 ```bash
 # Server (port 51860)
-sudo ./tun_bridge --mode server --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
+sudo ./tun_bridge --mode server --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
 
 # Client  
-sudo ./tun_bridge --mode client --remote-ip server.com --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
+sudo ./tun_bridge --mode client --remote-ip server.com --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
 ```
 
 #### Firewall-Friendly (port 443)
 ```bash
 # Server (HTTPS port for firewall traversal)
-sudo ./tun_bridge --mode server --port 443 --local-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
+sudo ./tun_bridge --mode server --port 443 --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
 
 # Client
-sudo ./tun_bridge --mode client --remote-ip server.com --port 443 --local-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
+sudo ./tun_bridge --mode client --remote-ip server.com --port 443 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
 ```
 
 ## 🔧 Service Installation

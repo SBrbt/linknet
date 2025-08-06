@@ -87,7 +87,7 @@ if [ "$MODE" = "client" ]; then
     EXEC_START="$EXEC_START --remote-ip $SERVER_HOST"
 fi
 
-EXEC_START="$EXEC_START --port $PORT --dev tun0 --local-ip $LOCAL_IP --remote-tun-ip $REMOTE_IP"
+EXEC_START="$EXEC_START --port $PORT --dev tun0 --local-tun-ip $LOCAL_IP --remote-tun-ip $REMOTE_IP"
 
 if [[ "$ENABLE_ROUTE" =~ ^[Yy] ]]; then
     EXEC_START="$EXEC_START --enable-route"
