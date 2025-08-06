@@ -63,8 +63,14 @@ public:
     // Parse network address and prefix
     static bool parse_cidr(const std::string& cidr, std::string& network, int& prefix);
     
+    // Check if IP is within network range
+    static bool ip_in_network(const std::string& ip, const std::string& network, int prefix);
+    
     // Check if route exists
     bool route_exists(const std::string& network_cidr);
+    
+    // Check if a broader route covers the target network
+    bool has_covering_route(const std::string& network_cidr);
     
     // Print current routes (for debugging)
     void print_routes();

@@ -35,6 +35,12 @@ bool RouteManager::add_tun_route(const std::string& network_cidr) {
         return true;
     }
     
+    // Check if a broader route already covers this destination
+    if (has_covering_route(network_cidr)) {
+        Logger::log(LogLevel::INFO, "Route for " + network_cidr + " is already covered by a broader route on " + tun_device);
+        return true;
+    }
+    
     // Backup existing route for this network if it exists
     backup_route(network_cidr);
     
@@ -217,10 +223,81 @@ bool RouteManager::parse_cidr(const std::string& cidr, std::string& network, int
     }
 }
 
+bool RouteManager::ip_in_network(const std::string& ip, const std::string& network, int prefix) {
+    // Convert IP addresses to 32-bit integers for comparison
+    auto ip_to_int = [](const std::string& ip) -> uint32_t {
+        std::istringstream iss(ip);
+        std::string octet;
+        uint32_t result = 0;
+        
+        for (int i = 0; i < 4; i++) {
+            if (!std::getline(iss, octet, '.')) return 0;
+            try {
+                int val = std::stoi(octet);
+                if (val < 0 || val > 255) return 0;
+                result = (result << 8) | val;
+            } catch (...) {
+                return 0;
+            }
+        }
+        return result;
+    };
+    
+    uint32_t ip_int = ip_to_int(ip);
+    uint32_t network_int = ip_to_int(network);
+    
+    // Create network mask
+    uint32_t mask = (prefix == 0) ? 0 : (0xFFFFFFFF << (32 - prefix));
+    
+    // Check if IP is in the network
+    return (ip_int & mask) == (network_int & mask);
+}
+
 bool RouteManager::route_exists(const std::string& network_cidr) {
     std::string cmd = "ip route show " + network_cidr;
     std::string output = execute_command_with_output(cmd);
     return !output.empty() && output.find(network_cidr) != std::string::npos;
+}
+
+bool RouteManager::has_covering_route(const std::string& network_cidr) {
+    // Parse the target network
+    std::string target_network;
+    int target_prefix;
+    if (!parse_cidr(network_cidr, target_network, target_prefix)) {
+        return false;
+    }
+    
+    // Get current routing table for the TUN device
+    std::string cmd = "ip route show dev " + tun_device;
+    std::string output = execute_command_with_output(cmd);
+    
+    std::istringstream iss(output);
+    std::string line;
+    
+    while (std::getline(iss, line)) {
+        if (line.empty()) continue;
+        
+        // Parse each route line
+        std::istringstream line_iss(line);
+        std::string route_network;
+        if (line_iss >> route_network) {
+            // Check if this route covers our target
+            std::string existing_network;
+            int existing_prefix;
+            if (parse_cidr(route_network, existing_network, existing_prefix)) {
+                // A route covers our target if:
+                // 1. It has a smaller or equal prefix (broader or equal coverage)
+                // 2. The target IP falls within the existing network range
+                if (existing_prefix <= target_prefix && 
+                    ip_in_network(target_network, existing_network, existing_prefix)) {
+                    Logger::log(LogLevel::DEBUG, "Found covering route: " + route_network + " covers " + network_cidr);
+                    return true;
+                }
+            }
+        }
+    }
+    
+    return false;
 }
 
 void RouteManager::print_routes() {
