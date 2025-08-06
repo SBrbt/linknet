@@ -321,22 +321,36 @@ bool Bridge::perform_authentication() {
 
 bool Bridge::handle_auth_packet(const char* buffer, size_t size) {
     if (size < sizeof(EncryptedHeader)) {
+        Logger::log(LogLevel::DEBUG, "Auth packet too small: " + std::to_string(size));
         return false;
     }
     
     const EncryptedHeader* header = (const EncryptedHeader*)buffer;
     PacketType type = (PacketType)header->packet_type;
     
+    Logger::log(LogLevel::DEBUG, "Handling auth packet, type: " + std::to_string((int)type) + 
+               ", mode: " + config.mode);
+    
     if (type == PacketType::AUTH_REQUEST && config.mode == "server") {
+        Logger::log(LogLevel::DEBUG, "Server processing AUTH_REQUEST");
         char response[BUFFER_SIZE];
         size_t response_size = sizeof(response);
         
         if (crypto_manager.handle_auth_request(buffer, size, response, response_size)) {
-            socket_manager.send_data(response, response_size);
-            return true;
+            Logger::log(LogLevel::DEBUG, "Auth request processed, sending response, size: " + 
+                       std::to_string(response_size));
+            ssize_t sent = socket_manager.send_data(response, response_size);
+            Logger::log(LogLevel::DEBUG, "Auth response sent: " + std::to_string(sent) + " bytes");
+            return sent == (ssize_t)response_size;
+        } else {
+            Logger::log(LogLevel::ERROR, "Failed to process auth request");
         }
     } else if (type == PacketType::AUTH_RESPONSE && config.mode == "client") {
+        Logger::log(LogLevel::DEBUG, "Client processing AUTH_RESPONSE");
         return crypto_manager.handle_auth_response(buffer, size);
+    } else {
+        Logger::log(LogLevel::DEBUG, "Auth packet type mismatch - type: " + std::to_string((int)type) + 
+                   ", mode: " + config.mode);
     }
     
     return false;
@@ -393,17 +407,22 @@ bool Bridge::send_keepalive() {
 
 bool Bridge::handle_encrypted_packet(const char* buffer, size_t size) {
     if (size < sizeof(EncryptedHeader)) {
+        Logger::log(LogLevel::DEBUG, "Packet too small for EncryptedHeader: " + std::to_string(size));
         return false;
     }
     
     const EncryptedHeader* header = (const EncryptedHeader*)buffer;
     PacketType type = (PacketType)header->packet_type;
     
+    Logger::log(LogLevel::DEBUG, "Received packet type: " + std::to_string((int)type) + 
+               ", size: " + std::to_string(size));
+    
     switch (type) {
         case PacketType::AUTH_REQUEST:
         case PacketType::AUTH_RESPONSE:
         case PacketType::AUTH_SUCCESS:
         case PacketType::AUTH_FAILED:
+            Logger::log(LogLevel::DEBUG, "Processing auth packet");
             return handle_auth_packet(buffer, size);
             
         case PacketType::DATA_PACKET: {
