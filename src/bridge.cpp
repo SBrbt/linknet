@@ -253,6 +253,8 @@ void Bridge::auth_loop() {
 
 bool Bridge::perform_authentication() {
     if (config.mode == "client") {
+        Logger::log(LogLevel::DEBUG, "Client starting authentication...");
+        
         // Client initiates authentication
         char auth_buffer[BUFFER_SIZE];
         size_t auth_size = sizeof(auth_buffer);
@@ -262,11 +264,18 @@ bool Bridge::perform_authentication() {
             return false;
         }
         
+        Logger::log(LogLevel::DEBUG, "Created authentication request, size: " + std::to_string(auth_size));
+        
         ssize_t sent = socket_manager.send_data(auth_buffer, auth_size);
         if (sent != (ssize_t)auth_size) {
-            Logger::log(LogLevel::ERROR, "Failed to send authentication request");
+            Logger::log(LogLevel::ERROR, "Failed to send authentication request, sent: " + 
+                       std::to_string(sent) + ", expected: " + std::to_string(auth_size));
+            Logger::log(LogLevel::DEBUG, std::string("Socket connection status: ") + 
+                       (socket_manager.is_socket_connected() ? "connected" : "disconnected"));
             return false;
         }
+        
+        Logger::log(LogLevel::DEBUG, "Authentication request sent successfully");
         
         // Wait for response
         fd_set read_fds;
@@ -276,22 +285,37 @@ bool Bridge::perform_authentication() {
         timeout.tv_sec = 10; // 10 second timeout
         timeout.tv_usec = 0;
         
+        Logger::log(LogLevel::DEBUG, "Waiting for authentication response...");
         int activity = select(socket_manager.get_fd() + 1, &read_fds, NULL, NULL, &timeout);
         if (activity <= 0) {
-            Logger::log(LogLevel::ERROR, "Authentication timeout");
+            if (activity == 0) {
+                Logger::log(LogLevel::ERROR, "Authentication timeout (10 seconds)");
+            } else {
+                Logger::log(LogLevel::ERROR, "Authentication select error: " + 
+                           NetworkUtils::get_error_string(errno));
+            }
             return false;
         }
+        
+        Logger::log(LogLevel::DEBUG, "Data available for authentication response");
         
         char response_buffer[BUFFER_SIZE];
         ssize_t received = socket_manager.receive_data(response_buffer, sizeof(response_buffer));
         if (received <= 0) {
-            Logger::log(LogLevel::ERROR, "Failed to receive authentication response");
+            Logger::log(LogLevel::ERROR, "Failed to receive authentication response, received: " + 
+                       std::to_string(received));
             return false;
         }
         
-        return crypto_manager.handle_auth_response(response_buffer, received);
+        Logger::log(LogLevel::DEBUG, "Received authentication response, size: " + std::to_string(received));
+        
+        bool auth_result = crypto_manager.handle_auth_response(response_buffer, received);
+        Logger::log(LogLevel::DEBUG, std::string("Authentication result: ") + (auth_result ? "success" : "failed"));
+        
+        return auth_result;
     }
     
+    Logger::log(LogLevel::DEBUG, "Server mode: waiting for client authentication");
     return true; // Server waits for client to initiate
 }
 
