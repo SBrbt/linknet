@@ -53,7 +53,12 @@ bool RouteManager::add_tun_route(const std::string& network_cidr) {
         Logger::log(LogLevel::INFO, "Added route: " + network_cidr + " via " + tun_device);
         return true;
     } else {
-        Logger::log(LogLevel::ERROR, "Failed to add route: " + network_cidr);
+        // Check if route already exists and points to the same device
+        if (route_exists(network_cidr)) {
+            Logger::log(LogLevel::INFO, "Route " + network_cidr + " already exists, no changes needed");
+            return true;
+        }
+        Logger::log(LogLevel::WARNING, "Failed to add route: " + network_cidr + " (may already exist or be conflicting)");
         return false;
     }
 }

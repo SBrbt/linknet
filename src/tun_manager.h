@@ -11,10 +11,15 @@ private:
     std::string local_ip;
     std::string netmask;
     bool is_open;
+    mutable std::mutex tun_mutex;  // Thread safety
 
 public:
     TunManager();
     ~TunManager();
+    
+    // Disable copy constructor and assignment operator
+    TunManager(const TunManager&) = delete;
+    TunManager& operator=(const TunManager&) = delete;
     
     // Create TUN interface
     bool create_tun(const std::string& dev_name);
@@ -24,27 +29,42 @@ public:
                             const std::string& remote_ip,
                            const std::string& netmask = "255.255.255.0");
     
-    // Read packet from TUN interface
-    ssize_t read_packet(char* buffer, size_t buffer_size);
+    // Read packet from TUN interface with timeout
+    ssize_t read_packet(char* buffer, size_t buffer_size, int timeout_ms = -1);
     
-    // Write packet to TUN interface
+    // Write packet to TUN interface (thread-safe)
     ssize_t write_packet(const char* buffer, size_t packet_size);
     
-    // Get TUN file descriptor
-    int get_fd() const { return tun_fd; }
+    // Get TUN file descriptor (thread-safe)
+    int get_fd() const { 
+        std::lock_guard<std::mutex> lock(tun_mutex);
+        return tun_fd; 
+    }
     
-    // Get device name
-    const std::string& get_device_name() const { return dev_name; }
+    // Get device name (thread-safe)
+    const std::string& get_device_name() const { 
+        std::lock_guard<std::mutex> lock(tun_mutex);
+        return dev_name; 
+    }
     
-    // Check if TUN is open
-    bool is_opened() const { return is_open; }
+    // Check if TUN is open (thread-safe)
+    bool is_opened() const { 
+        std::lock_guard<std::mutex> lock(tun_mutex);
+        return is_open; 
+    }
     
-    // Close TUN interface
+    // Close TUN interface (thread-safe)
     void close_tun();
     
+    // Validate packet before processing
+    bool validate_packet(const char* buffer, size_t size) const;
+    
 private:
-    // Execute system command
+    // Execute system command (with better error handling)
     bool execute_command(const std::string& command);
+    
+    // Set file descriptor to non-blocking mode
+    bool set_non_blocking(int fd);
 };
 
 #endif // TUN_MANAGER_H

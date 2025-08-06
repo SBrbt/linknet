@@ -4,8 +4,10 @@
 
 Bridge::Bridge(TunManager* tun, SocketManager* socket, CryptoManager* crypto)
     : tun_manager(tun), socket_manager(socket), crypto_manager(crypto),
-      is_authenticated(false), should_stop(false), packets_processed(0), bytes_transferred(0),
-      last_stats_time(std::chrono::high_resolution_clock::now()) {
+      is_authenticated(false), should_stop(false), auth_in_progress(false), packets_processed(0), bytes_transferred(0),
+      last_stats_time(std::chrono::high_resolution_clock::now()),
+      total_packets_sent(0), total_packets_received(0), total_bytes_sent(0), 
+      total_bytes_received(0), dropped_packets(0), auth_failures(0) {
 }
 
 Bridge::~Bridge() {
@@ -278,13 +280,18 @@ bool Bridge::process_tun_packet(const std::vector<uint8_t>& packet) {
 }
 
 bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
+    // Check if this is an authentication packet
+    std::string packet_str(packet.begin(), packet.end());
+    if (packet_str.find("AUTH_") == 0) {
+        return handle_auth_packet(packet);
+    }
+    
     if (!is_authenticated) {
-        // Handle authentication packets
-        return handle_authentication();
+        Logger::log(LogLevel::WARNING, "Received data packet before authentication complete, dropping");
+        return false;
     }
     
     // Check if this is a heartbeat packet
-    std::string packet_str(packet.begin(), packet.end());
     if (packet_str == "HEARTBEAT") {
         Logger::log(LogLevel::DEBUG, "Heartbeat received");
         return true;
@@ -325,42 +332,104 @@ bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
 }
 
 bool Bridge::handle_authentication() {
+    if (auth_in_progress.exchange(true)) {
+        Logger::log(LogLevel::DEBUG, "Authentication already in progress, skipping");
+        return true;
+    }
+    
     Logger::log(LogLevel::INFO, "Performing authentication handshake...");
     
+    bool result = false;
     if (mode == "client") {
-        // Client sends authentication request
-        const std::string auth_message = "AUTH_REQUEST";
-        if (socket_manager->send_data(auth_message.c_str(), auth_message.length()) <= 0) {
-            Logger::log(LogLevel::ERROR, "Failed to send authentication request");
-            return false;
-        }
-        Logger::log(LogLevel::INFO, "Authentication request sent");
+        result = send_auth_request();
     } else {
-        // Server sends authentication response
-        const std::string auth_response = "AUTH_OK";
-        if (socket_manager->send_data(auth_response.c_str(), auth_response.length()) <= 0) {
-            Logger::log(LogLevel::ERROR, "Failed to send authentication response");
+        // Server waits for client auth request, doesn't initiate
+        Logger::log(LogLevel::INFO, "Server waiting for client authentication");
+        result = true;
+    }
+    
+    if (!result) {
+        auth_in_progress = false;
+    }
+    
+    return result;
+}
+
+bool Bridge::handle_auth_packet(const std::vector<uint8_t>& packet) {
+    std::string packet_str(packet.begin(), packet.end());
+    
+    if (packet_str == "AUTH_REQUEST") {
+        if (mode == "server") {
+            Logger::log(LogLevel::INFO, "Received authentication request from client");
+            return send_auth_response();
+        } else {
+            Logger::log(LogLevel::WARNING, "Client received AUTH_REQUEST - protocol error");
             return false;
         }
-        Logger::log(LogLevel::INFO, "Authentication response sent");
+    } else if (packet_str == "AUTH_OK") {
+        if (mode == "client") {
+            Logger::log(LogLevel::INFO, "Received authentication success from server");
+            is_authenticated = true;
+            auth_in_progress = false;
+            
+            // Set crypto manager authenticated state if encryption is enabled
+            if (crypto_manager) {
+                crypto_manager->set_authenticated(true);
+                Logger::log(LogLevel::INFO, "Crypto manager authenticated");
+            }
+            
+            Logger::log(LogLevel::INFO, "Client authentication successful");
+            return true;
+        } else {
+            Logger::log(LogLevel::WARNING, "Server received AUTH_OK - protocol error");
+            return false;
+        }
+    }
+    
+    Logger::log(LogLevel::WARNING, "Unknown authentication packet: " + packet_str);
+    return false;
+}
+
+bool Bridge::send_auth_request() {
+    const std::string auth_message = "AUTH_REQUEST";
+    if (socket_manager->send_data(auth_message.c_str(), auth_message.length()) <= 0) {
+        Logger::log(LogLevel::ERROR, "Failed to send authentication request");
+        return false;
+    }
+    Logger::log(LogLevel::INFO, "Authentication request sent");
+    return true;
+}
+
+bool Bridge::send_auth_response() {
+    const std::string auth_response = "AUTH_OK";
+    if (socket_manager->send_data(auth_response.c_str(), auth_response.length()) <= 0) {
+        Logger::log(LogLevel::ERROR, "Failed to send authentication response");
+        return false;
     }
     
     is_authenticated = true;
+    auth_in_progress = false;
     
     // Set crypto manager authenticated state if encryption is enabled
     if (crypto_manager) {
-        // Manually set authenticated state for simplified authentication
-        // In a real implementation, this would involve proper key exchange
         crypto_manager->set_authenticated(true);
         Logger::log(LogLevel::INFO, "Crypto manager authenticated");
     }
     
-    Logger::log(LogLevel::INFO, "Authentication successful");
+    Logger::log(LogLevel::INFO, "Server authentication successful");
     return true;
 }
 
-void Bridge::update_statistics(size_t bytes) {
+void Bridge::update_statistics(size_t bytes, bool sent) {
     bytes_transferred.fetch_add(bytes);
+    
+    if (sent) {
+        total_packets_sent++;
+        total_bytes_sent.fetch_add(bytes);
+    } else {
+        total_packets_received++;
+        total_bytes_received.fetch_add(bytes);
+    }
 }
 
 void Bridge::print_performance_stats() {
@@ -375,10 +444,15 @@ void Bridge::print_performance_stats() {
         double mbps = (static_cast<double>(bytes) * 8.0) / (duration.count() * 1024.0 * 1024.0);
         
         Logger::log(LogLevel::INFO, 
-            "Performance: " + std::to_string(packets) + " packets, " +
-            std::to_string(pps) + " pps, " + std::to_string(mbps) + " Mbps");
+            "Performance Stats - Packets: " + std::to_string(packets) + 
+            ", PPS: " + std::to_string(pps) + 
+            ", Mbps: " + std::to_string(mbps) +
+            ", Sent: " + std::to_string(total_packets_sent.load()) +
+            ", Received: " + std::to_string(total_packets_received.load()) +
+            ", Dropped: " + std::to_string(dropped_packets.load()) +
+            ", Auth Failures: " + std::to_string(auth_failures.load()));
         
-        // Reset counters
+        // Reset counters for next interval
         packets_processed = 0;
         bytes_transferred = 0;
         last_stats_time = now;

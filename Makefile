@@ -33,8 +33,8 @@ generate-psk:
 # Test performance
 test-performance:
 	@echo "Running performance tests..."
-	@chmod +x test_performance.sh
-	@sudo ./test_performance.sh
+	@chmod +x scripts/test_performance.sh
+	@sudo ./scripts/test_performance.sh
 
 # Interactive installation
 install: $(TARGET)
@@ -50,4 +50,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
 
-.PHONY: all clean deps install uninstall generate-psk test-performance
+.PHONY: all clean install uninstall generate-psk test-performance

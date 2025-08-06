@@ -55,7 +55,6 @@ void print_usage(const char* program_name) {
     std::cout << "  --psk-file FILE     Read pre-shared key from file\n";
     std::cout << "  --no-encryption     Disable encryption (for performance testing)\n";
     std::cout << "  --log-level LEVEL   Log level: debug, info, warning, error (default: info)\n";
-    std::cout << "  --performance-mode  Enable high-performance optimizations\n";
     std::cout << "  --help              Show this help message\n\n";
     std::cout << "Examples:\n";
     std::cout << "  Server: " << program_name << " --mode server --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file /etc/linknet.psk\n";
@@ -64,7 +63,6 @@ void print_usage(const char* program_name) {
 
 struct MainConfig : public Config {
     std::string log_level;
-    bool performance_mode;
 };
 
 bool parse_arguments(int argc, char* argv[], MainConfig& config) {
@@ -73,7 +71,6 @@ bool parse_arguments(int argc, char* argv[], MainConfig& config) {
     config.port = 51860;
     config.enable_encryption = true;
     config.log_level = "info";
-    config.performance_mode = false;
     
     static struct option long_options[] = {
         {"mode", required_argument, 0, 'm'},
@@ -86,13 +83,12 @@ bool parse_arguments(int argc, char* argv[], MainConfig& config) {
         {"psk-file", required_argument, 0, 'f'},
         {"no-encryption", no_argument, 0, 'n'},
         {"log-level", required_argument, 0, 'v'},
-        {"performance-mode", no_argument, 0, 'P'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
     int c;
-    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:nv:Ph", long_options, nullptr)) != -1) {
+    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:nv:h", long_options, nullptr)) != -1) {
         switch (c) {
             case 'm':
                 config.mode = optarg;
@@ -132,9 +128,6 @@ bool parse_arguments(int argc, char* argv[], MainConfig& config) {
                 break;
             case 'v':
                 config.log_level = optarg;
-                break;
-            case 'P':
-                config.performance_mode = true;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -184,7 +177,6 @@ void print_config(const MainConfig& config) {
     Logger::log(LogLevel::INFO, "Local TUN IP: " + config.local_ip);
     Logger::log(LogLevel::INFO, "Remote TUN IP: " + config.remote_tun_ip);
     Logger::log(LogLevel::INFO, "Encryption: " + std::string(config.enable_encryption ? "Enabled" : "Disabled"));
-    Logger::log(LogLevel::INFO, "Performance Mode: " + std::string(config.performance_mode ? "Enabled" : "Disabled"));
     
     if (config.mode == "client") {
         Logger::log(LogLevel::INFO, "Remote Server: " + config.remote_ip + ":" + std::to_string(config.port));
@@ -317,9 +309,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Configure routes
-    std::string route_target = config.remote_tun_ip;
-    if (config.mode == "client") {
+    // Configure routes (only if needed for special routing)
+    if (config.mode == "client" && config.enable_auto_route) {
+        std::string route_target = config.remote_tun_ip + "/32";  // Add /32 for single host route
         if (!route_manager.initialize(config.dev_name, config.remote_tun_ip)) {
             Logger::log(LogLevel::ERROR, "Failed to initialize route manager");
             return 1;
@@ -328,7 +320,7 @@ int main(int argc, char* argv[]) {
         Logger::log(LogLevel::INFO, "Adding TUN routes for: " + route_target);
         std::vector<std::string> routes = {route_target};
         if (!route_manager.add_tun_routes(routes)) {
-            Logger::log(LogLevel::WARNING, "Failed to add some routes (might be normal)");
+            Logger::log(LogLevel::DEBUG, "Some routes were not added (may already exist)");
         }
         
         // Print route information

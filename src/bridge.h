@@ -41,12 +41,19 @@ private:
     // Authentication state
     std::atomic<bool> is_authenticated;
     std::atomic<bool> should_stop;
+    std::atomic<bool> auth_in_progress;
     std::atomic<uint64_t> packets_processed;
     std::atomic<uint64_t> bytes_transferred;
     
     // Performance monitoring
     std::chrono::high_resolution_clock::time_point last_stats_time;
     std::mutex stats_mutex;
+    std::atomic<uint64_t> total_packets_sent;
+    std::atomic<uint64_t> total_packets_received;
+    std::atomic<uint64_t> total_bytes_sent;
+    std::atomic<uint64_t> total_bytes_received;
+    std::atomic<uint64_t> dropped_packets;
+    std::atomic<uint64_t> auth_failures;
     
     // Connection management
     std::string mode;
@@ -65,12 +72,15 @@ private:
     
     // Authentication
     bool handle_authentication();
+    bool handle_auth_packet(const std::vector<uint8_t>& packet);
     bool send_auth_request();
     bool send_auth_response();
     
     // Performance monitoring
-    void update_statistics(size_t bytes);
+    void update_statistics(size_t bytes, bool sent = true);
     void print_performance_stats();
+    void increment_dropped_packets() { dropped_packets++; }
+    void increment_auth_failures() { auth_failures++; }
 
 public:
     Bridge(TunManager* tun, SocketManager* socket, CryptoManager* crypto);

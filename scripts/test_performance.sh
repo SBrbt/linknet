@@ -21,7 +21,7 @@ if ! command -v iperf3 &> /dev/null; then
 fi
 
 # Check if linknet binary exists
-if [ ! -f "./linknet" ]; then
+if [ ! -f "linknet" ]; then
     echo "Building LinkNet..."
     make clean && make
 fi
@@ -32,10 +32,6 @@ CLIENT_TUN_IP="10.0.1.2"
 PSK_FILE="/tmp/linknet_test.psk"
 PORT=51860
 IPERF_PORT=5201
-
-# Generate test PSK
-echo "test123456789abcdef0123456789abcdef" > "$PSK_FILE"
-chmod 600 "$PSK_FILE"
 
 # Cleanup function
 cleanup() {
@@ -48,19 +44,34 @@ cleanup() {
     rm -f "$PSK_FILE"
 }
 
+# Initial cleanup (without removing PSK file)
+initial_cleanup() {
+    echo "Performing initial cleanup..."
+    pkill -f linknet || true
+    pkill -f iperf3 || true
+    sleep 2
+    ip link delete tun0 2>/dev/null || true
+    ip link delete tun1 2>/dev/null || true
+}
+
 # Trap for cleanup on exit
 trap cleanup EXIT
 
 echo ""
 echo "=== Starting LinkNet Test ==="
 
-cleanup
+initial_cleanup
 sleep 1
+
+# Generate test PSK after initial cleanup
+echo "Generating test PSK..."
+echo "test123456789abcdef0123456789abcdef" > "$PSK_FILE"
+chmod 600 "$PSK_FILE"
 
 # Start server
 echo "Starting LinkNet server..."
 ./linknet --mode server \
-          --dev tun0 \
+          --dev server \
           --local-tun-ip $SERVER_TUN_IP \
           --remote-tun-ip $CLIENT_TUN_IP \
           --psk-file "$PSK_FILE" \
@@ -72,7 +83,7 @@ sleep 3
 # Start client
 echo "Starting LinkNet client..."
 ./linknet --mode client \
-          --dev tun1 \
+          --dev client \
           --remote-ip 127.0.0.1 \
           --local-tun-ip $CLIENT_TUN_IP \
           --remote-tun-ip $SERVER_TUN_IP \

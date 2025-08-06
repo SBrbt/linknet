@@ -86,7 +86,9 @@ ping 10.0.1.1
 
 ### 5. Performance Testing
 ```bash
-sudo ./test_performance.sh  # Built-in iperf3 performance test
+sudo make test-performance  # Built-in iperf3 performance test
+# OR direct script execution
+sudo ./scripts/test_performance.sh
 ```
 
 ## ⚙️ Configuration Options
@@ -107,7 +109,6 @@ sudo ./test_performance.sh  # Built-in iperf3 performance test
 --psk KEY                # PSK string (less secure than file)
 --no-encryption          # Disable encryption (testing only)
 --log-level LEVEL        # debug|info|warning|error (default: info)
---performance-mode       # Enable optimizations
 ```
 
 ## 🔧 Service Management
@@ -155,7 +156,9 @@ sudo scp /etc/linknet.psk user@remote-node:/etc/linknet.psk
 ### Performance Testing
 ```bash
 # Built-in test with iperf3
-sudo ./test_performance.sh
+sudo make test-performance
+# OR direct script execution
+sudo ./scripts/test_performance.sh
 
 # Manual testing
 # Terminal 1 (server):
@@ -171,7 +174,7 @@ iperf3 -c 10.0.1.1 -B 10.0.1.2
 ```bash
 make              # Build release version
 make clean        # Clean build artifacts
-make deps         # Check dependencies
+make generate-psk # Generate secure PSK
 ```
 
 ### Code Structure
@@ -184,11 +187,12 @@ src/
 ├── crypto_manager.h/cpp  # Encryption and authentication
 ├── route_manager.h/cpp   # Network route management
 ├── command_executor.h/cpp # Async command execution
-└── utils.h               # Logging and utilities
+├── utils.h/cpp           # Logging and utilities
 
 scripts/
 ├── install.sh            # Interactive installation
-└── uninstall.sh          # Complete removal
+├── uninstall.sh          # Complete removal
+└── test_performance.sh   # Performance testing with iperf3
 ```
 
 ## 🐛 Troubleshooting
