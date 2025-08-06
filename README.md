@@ -40,7 +40,6 @@ A high-performance, secure C++ network bridge that creates encrypted point-to-po
 ```bash
 git clone https://github.com/SBrbt/linknet.git
 cd linknet
-make deps  # Check dependencies
 make       # Build project
 ```
 

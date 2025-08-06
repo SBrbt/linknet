@@ -26,14 +26,6 @@ $(BUILD_DIR)/%.o: $(SRCDIR)/%.cpp | $(BUILD_DIR)
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
-# Check dependencies
-deps:
-	@echo "Checking system dependencies..."
-	@which g++ > /dev/null || (echo "Error: g++ not found. Install with: sudo apt install g++" && exit 1)
-	@pkg-config --exists openssl || (echo "Error: OpenSSL development libraries not found. Install with: sudo apt install libssl-dev" && exit 1)
-	@[ -c /dev/net/tun ] || (echo "Error: /dev/net/tun not found. TUN/TAP support required." && exit 1)
-	@echo "All dependencies satisfied."
-
 # Generate random PSK
 generate-psk:
 	openssl rand -hex 32
