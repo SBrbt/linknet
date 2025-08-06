@@ -21,32 +21,10 @@ bool Bridge::start() {
     }
     
     running.store(true);
-    Logger::log(LogLevel::INFO, "Starting encrypted packet bridge...");
+    Logger::log(LogLevel::INFO, "Starting encrypted packet bridge (single-threaded)...");
     
-    // Start authentication thread
-    auth_thread = std::thread(&Bridge::auth_loop, this);
-    
-    // Start forwarding threads
-    tun_to_socket_thread = std::thread(&Bridge::tun_to_socket_loop, this);
-    socket_to_tun_thread = std::thread(&Bridge::socket_to_tun_loop, this);
-    
-    if (config.enable_keepalive) {
-        keepalive_thread = std::thread(&Bridge::keepalive_loop, this);
-    }
-    
-    // Wait for threads to complete
-    if (auth_thread.joinable()) {
-        auth_thread.join();
-    }
-    if (tun_to_socket_thread.joinable()) {
-        tun_to_socket_thread.join();
-    }
-    if (socket_to_tun_thread.joinable()) {
-        socket_to_tun_thread.join();
-    }
-    if (keepalive_thread.joinable()) {
-        keepalive_thread.join();
-    }
+    // Single-threaded main loop
+    main_loop();
     
     Logger::log(LogLevel::INFO, "Bridge stopped");
     return true;
@@ -59,267 +37,162 @@ void Bridge::stop() {
     
     Logger::log(LogLevel::INFO, "Stopping bridge...");
     running.store(false);
-    
-    // Wait for threads to finish
-    if (auth_thread.joinable()) {
-        auth_thread.join();
-    }
-    if (tun_to_socket_thread.joinable()) {
-        tun_to_socket_thread.join();
-    }
-    if (socket_to_tun_thread.joinable()) {
-        socket_to_tun_thread.join();
-    }
-    if (keepalive_thread.joinable()) {
-        keepalive_thread.join();
-    }
 }
 
-void Bridge::tun_to_socket_loop() {
-    char buffer[BUFFER_SIZE];
+void Bridge::main_loop() {
+    char tun_buffer[BUFFER_SIZE];
+    char socket_buffer[BUFFER_SIZE];
     fd_set read_fds;
     struct timeval timeout;
+    time_t last_keepalive = time(nullptr);
+    time_t last_auth_attempt = 0;
+    bool auth_in_progress = false;
     
-    Logger::log(LogLevel::DEBUG, "TUN to Socket forwarding thread started");
+    Logger::log(LogLevel::DEBUG, "Single-threaded main loop started");
     
     while (running.load()) {
-        // Use select with timeout for clean shutdown
         FD_ZERO(&read_fds);
-        FD_SET(tun_manager.get_fd(), &read_fds);
+        int max_fd = 0;
         
+        // Always monitor TUN interface
+        if (tun_manager.get_fd() >= 0) {
+            FD_SET(tun_manager.get_fd(), &read_fds);
+            max_fd = std::max(max_fd, tun_manager.get_fd());
+        }
+        
+        // Monitor socket if connected
+        if (socket_manager.is_socket_connected() && socket_manager.get_fd() >= 0) {
+            FD_SET(socket_manager.get_fd(), &read_fds);
+            max_fd = std::max(max_fd, socket_manager.get_fd());
+        }
+        
+        // Set timeout for regular maintenance tasks
         timeout.tv_sec = 1;
         timeout.tv_usec = 0;
         
-        int activity = select(tun_manager.get_fd() + 1, &read_fds, NULL, NULL, &timeout);
+        int activity = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
         
         if (activity < 0) {
             if (errno != EINTR) {
-                Logger::log(LogLevel::ERROR, "Select error in TUN to Socket loop: " + 
+                Logger::log(LogLevel::ERROR, "Select error in main loop: " + 
                            NetworkUtils::get_error_string(errno));
             }
             continue;
         }
         
-        if (activity == 0) {
-            // Timeout, continue to check running flag
-            continue;
-        }
+        time_t now = time(nullptr);
         
-        if (!FD_ISSET(tun_manager.get_fd(), &read_fds)) {
-            continue;
-        }
-        
-        // Read packet from TUN
-        ssize_t bytes_read = tun_manager.read_packet(buffer, sizeof(buffer));
-        if (bytes_read < 0) {
-            continue;
-        }
-        
-        if (bytes_read == 0) {
-            continue;
-        }
-        
-        // Check if socket is connected and authenticated
-        if (!socket_manager.is_socket_connected() || !crypto_manager.is_authenticated()) {
-            if (config.mode == "client") {
-                // Try to reconnect
-                if (!attempt_reconnection()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                    continue;
+        // Handle authentication (non-blocking)
+        if (!crypto_manager.is_authenticated()) {
+            if (!auth_in_progress && (now - last_auth_attempt) >= 5) {
+                if (config.mode == "client") {
+                    Logger::log(LogLevel::DEBUG, "Client starting authentication...");
+                    if (attempt_authentication()) {
+                        auth_in_progress = true;
+                        last_auth_attempt = now;
+                    }
+                } else {
+                    Logger::log(LogLevel::DEBUG, "Server waiting for client authentication");
+                    last_auth_attempt = now;
                 }
-            } else {
-                // Server mode, wait for connection and authentication
-                continue;
             }
         }
         
-        // Send encrypted packet through socket
-        ssize_t bytes_sent = send_encrypted_data(buffer, bytes_read) ? bytes_read : -1;
-        if (bytes_sent > 0) {
-            tun_to_socket_packets.fetch_add(1);
-            tun_to_socket_bytes.fetch_add(bytes_sent);
-            update_activity();
+        // Handle socket data (authentication or regular data)
+        if (activity > 0 && socket_manager.is_socket_connected() && 
+            FD_ISSET(socket_manager.get_fd(), &read_fds)) {
             
-            Logger::log(LogLevel::DEBUG, 
-                       "Forwarded packet TUN->Socket: " + std::to_string(bytes_sent) + " bytes");
+            ssize_t bytes_read = socket_manager.receive_data(socket_buffer, sizeof(socket_buffer));
+            if (bytes_read > 0) {
+                if (handle_encrypted_packet(socket_buffer, bytes_read)) {
+                    if (auth_in_progress && crypto_manager.is_authenticated()) {
+                        Logger::log(LogLevel::INFO, "Authentication successful");
+                        auth_in_progress = false;
+                    }
+                }
+                update_activity();
+            } else if (bytes_read == 0) {
+                Logger::log(LogLevel::INFO, "Socket connection lost");
+                auth_in_progress = false;
+            }
+        }
+        
+        // Handle TUN data (only if authenticated)
+        if (activity > 0 && crypto_manager.is_authenticated() && 
+            tun_manager.get_fd() >= 0 && FD_ISSET(tun_manager.get_fd(), &read_fds)) {
+            
+            ssize_t bytes_read = tun_manager.read_packet(tun_buffer, sizeof(tun_buffer));
+            if (bytes_read > 0) {
+                if (socket_manager.is_socket_connected()) {
+                    if (send_encrypted_data(tun_buffer, bytes_read)) {
+                        tun_to_socket_packets.fetch_add(1);
+                        tun_to_socket_bytes.fetch_add(bytes_read);
+                        update_activity();
+                        Logger::log(LogLevel::DEBUG, 
+                                   "Forwarded TUN->Socket: " + std::to_string(bytes_read) + " bytes");
+                    }
+                }
+            }
+        }
+        
+        // Handle client reconnection
+        if (config.mode == "client" && !socket_manager.is_socket_connected()) {
+            if ((now - last_auth_attempt) >= config.reconnect_interval) {
+                attempt_reconnection();
+                last_auth_attempt = now;
+                auth_in_progress = false;
+            }
+        }
+        
+        // Handle keepalive
+        if (config.enable_keepalive && socket_manager.is_socket_connected() && 
+            crypto_manager.is_authenticated()) {
+            if ((now - last_keepalive) >= 30) {
+                if (!is_connection_healthy()) {
+                    Logger::log(LogLevel::DEBUG, "Sending keepalive");
+                    send_keepalive();
+                }
+                last_keepalive = now;
+            }
         }
     }
     
-    Logger::log(LogLevel::DEBUG, "TUN to Socket forwarding thread stopped");
+    Logger::log(LogLevel::DEBUG, "Main loop stopped");
 }
 
-void Bridge::socket_to_tun_loop() {
-    char buffer[BUFFER_SIZE];
-    fd_set read_fds;
-    struct timeval timeout;
-    
-    Logger::log(LogLevel::DEBUG, "Socket to TUN forwarding thread started");
-    
-    while (running.load()) {
-        // Check if socket is connected
-        if (!socket_manager.is_socket_connected()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-        
-        // Use select with timeout for clean shutdown
-        FD_ZERO(&read_fds);
-        FD_SET(socket_manager.get_fd(), &read_fds);
-        
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
-        
-        int activity = select(socket_manager.get_fd() + 1, &read_fds, NULL, NULL, &timeout);
-        
-        if (activity < 0) {
-            if (errno != EINTR) {
-                Logger::log(LogLevel::ERROR, "Select error in Socket to TUN loop: " + 
-                           NetworkUtils::get_error_string(errno));
-            }
-            continue;
-        }
-        
-        if (activity == 0) {
-            // Timeout, continue to check running flag
-            continue;
-        }
-        
-        if (!FD_ISSET(socket_manager.get_fd(), &read_fds)) {
-            continue;
-        }
-        
-        // Read data from socket
-        ssize_t bytes_read = socket_manager.receive_data(buffer, sizeof(buffer));
-        if (bytes_read < 0) {
-            Logger::log(LogLevel::DEBUG, "Socket receive error");
-            continue;
-        }
-
-        if (bytes_read == 0) {
-            // Connection closed
-            Logger::log(LogLevel::INFO, "Socket connection closed");
-            continue;
-        }
-
-        Logger::log(LogLevel::DEBUG, "Received " + std::to_string(bytes_read) + " bytes from socket");
-        
-        // Handle encrypted packet (includes auth, data, keepalive)
-        handle_encrypted_packet(buffer, bytes_read);
-        update_activity();
+bool Bridge::attempt_authentication() {
+    if (config.mode != "client") {
+        return false;
     }
     
-    Logger::log(LogLevel::DEBUG, "Socket to TUN forwarding thread stopped");
-}
-
-void Bridge::keepalive_loop() {
-    Logger::log(LogLevel::DEBUG, "Keepalive thread started");
-    
-    while (running.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(30));
-        
-        if (!running.load()) {
-            break;
-        }
-        
-        if (socket_manager.is_socket_connected()) {
-            if (!is_connection_healthy()) {
-                Logger::log(LogLevel::WARNING, "Connection appears unhealthy, sending keepalive");
-                send_keepalive();
-            }
-        }
+    if (!socket_manager.is_socket_connected()) {
+        return false;
     }
     
-    Logger::log(LogLevel::DEBUG, "Keepalive thread stopped");
-}
-
-void Bridge::auth_loop() {
-    Logger::log(LogLevel::DEBUG, "Authentication thread started");
+    char auth_buffer[BUFFER_SIZE];
+    size_t auth_size = sizeof(auth_buffer);
     
-    while (running.load()) {
-        if (socket_manager.is_socket_connected() && !crypto_manager.is_authenticated()) {
-            if (!perform_authentication()) {
-                Logger::log(LogLevel::WARNING, "Authentication failed, retrying in 5 seconds");
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-        } else if (crypto_manager.needs_reauth()) {
-            Logger::log(LogLevel::INFO, "Re-authentication required");
-            if (!perform_authentication()) {
-                Logger::log(LogLevel::WARNING, "Re-authentication failed");
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::seconds(10));
+    if (!crypto_manager.create_auth_request(auth_buffer, auth_size)) {
+        Logger::log(LogLevel::ERROR, "Failed to create authentication request");
+        return false;
     }
     
-    Logger::log(LogLevel::DEBUG, "Authentication thread stopped");
+    Logger::log(LogLevel::DEBUG, "Created authentication request, size: " + std::to_string(auth_size));
+    
+    ssize_t sent = socket_manager.send_data(auth_buffer, auth_size);
+    if (sent != (ssize_t)auth_size) {
+        Logger::log(LogLevel::ERROR, "Failed to send authentication request");
+        return false;
+    }
+    
+    Logger::log(LogLevel::DEBUG, "Authentication request sent, waiting for response");
+    return true;
 }
 
 bool Bridge::perform_authentication() {
-    if (config.mode == "client") {
-        Logger::log(LogLevel::DEBUG, "Client starting authentication...");
-        
-        // Client initiates authentication
-        char auth_buffer[BUFFER_SIZE];
-        size_t auth_size = sizeof(auth_buffer);
-        
-        if (!crypto_manager.create_auth_request(auth_buffer, auth_size)) {
-            Logger::log(LogLevel::ERROR, "Failed to create authentication request");
-            return false;
-        }
-        
-        Logger::log(LogLevel::DEBUG, "Created authentication request, size: " + std::to_string(auth_size));
-        
-        ssize_t sent = socket_manager.send_data(auth_buffer, auth_size);
-        if (sent != (ssize_t)auth_size) {
-            Logger::log(LogLevel::ERROR, "Failed to send authentication request, sent: " + 
-                       std::to_string(sent) + ", expected: " + std::to_string(auth_size));
-            Logger::log(LogLevel::DEBUG, std::string("Socket connection status: ") + 
-                       (socket_manager.is_socket_connected() ? "connected" : "disconnected"));
-            return false;
-        }
-        
-        Logger::log(LogLevel::DEBUG, "Authentication request sent successfully");
-        
-        // Wait for response
-        fd_set read_fds;
-        struct timeval timeout;
-        FD_ZERO(&read_fds);
-        FD_SET(socket_manager.get_fd(), &read_fds);
-        timeout.tv_sec = 10; // 10 second timeout
-        timeout.tv_usec = 0;
-        
-        Logger::log(LogLevel::DEBUG, "Waiting for authentication response...");
-        int activity = select(socket_manager.get_fd() + 1, &read_fds, NULL, NULL, &timeout);
-        if (activity <= 0) {
-            if (activity == 0) {
-                Logger::log(LogLevel::ERROR, "Authentication timeout (10 seconds)");
-            } else {
-                Logger::log(LogLevel::ERROR, "Authentication select error: " + 
-                           NetworkUtils::get_error_string(errno));
-            }
-            return false;
-        }
-        
-        Logger::log(LogLevel::DEBUG, "Data available for authentication response");
-        
-        char response_buffer[BUFFER_SIZE];
-        ssize_t received = socket_manager.receive_data(response_buffer, sizeof(response_buffer));
-        if (received <= 0) {
-            Logger::log(LogLevel::ERROR, "Failed to receive authentication response, received: " + 
-                       std::to_string(received));
-            return false;
-        }
-        
-        Logger::log(LogLevel::DEBUG, "Received authentication response, size: " + std::to_string(received));
-        
-        bool auth_result = crypto_manager.handle_auth_response(response_buffer, received);
-        Logger::log(LogLevel::DEBUG, std::string("Authentication result: ") + (auth_result ? "success" : "failed"));
-        
-        return auth_result;
-    }
-    
-    Logger::log(LogLevel::DEBUG, "Server mode: waiting for client authentication");
-    return true; // Server waits for client to initiate
+    // In single-threaded version, this is handled by main_loop
+    Logger::log(LogLevel::DEBUG, "Authentication handled by main loop");
+    return true;
 }
 
 bool Bridge::handle_auth_packet(const char* buffer, size_t size) {
@@ -348,8 +221,8 @@ bool Bridge::handle_auth_packet(const char* buffer, size_t size) {
         } else {
             Logger::log(LogLevel::ERROR, "Failed to process auth request");
         }
-    } else if (type == PacketType::AUTH_RESPONSE && config.mode == "client") {
-        Logger::log(LogLevel::DEBUG, "Client processing AUTH_RESPONSE");
+    } else if ((type == PacketType::AUTH_RESPONSE || type == PacketType::AUTH_SUCCESS) && config.mode == "client") {
+        Logger::log(LogLevel::DEBUG, "Client processing AUTH_RESPONSE/AUTH_SUCCESS");
         return crypto_manager.handle_auth_response(buffer, size);
     } else {
         Logger::log(LogLevel::DEBUG, "Auth packet type mismatch - type: " + std::to_string((int)type) + 
@@ -381,7 +254,6 @@ bool Bridge::attempt_reconnection() {
         update_activity();
     } else {
         Logger::log(LogLevel::WARNING, "Reconnection failed, will retry later");
-        std::this_thread::sleep_for(std::chrono::seconds(config.reconnect_interval));
     }
     
     reconnecting.store(false);

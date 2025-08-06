@@ -6,6 +6,8 @@
 #include "socket_manager.h"
 #include "crypto_manager.h"
 #include <chrono>
+#include <ctime>
+#include <algorithm>
 
 class Bridge {
 private:
@@ -16,11 +18,6 @@ private:
     std::atomic<bool> running;
     std::atomic<bool> reconnecting;
     
-    std::thread tun_to_socket_thread;
-    std::thread socket_to_tun_thread;
-    std::thread keepalive_thread;
-    std::thread auth_thread;
-    
     // Statistics
     std::atomic<uint64_t> tun_to_socket_packets;
     std::atomic<uint64_t> socket_to_tun_packets;
@@ -30,7 +27,7 @@ private:
     // Configuration
     Config config;
     
-    // Reconnection support
+    // Activity tracking
     std::chrono::steady_clock::time_point last_activity;
     std::mutex reconnect_mutex;
 
@@ -54,14 +51,12 @@ public:
     void reset_statistics();
 
 private:
-    // Main forwarding loops
-    void tun_to_socket_loop();
-    void socket_to_tun_loop();
-    void keepalive_loop();
-    void auth_loop();
+    // Main single-threaded loop
+    void main_loop();
     
     // Authentication handling
     bool perform_authentication();
+    bool attempt_authentication();
     bool handle_auth_packet(const char* buffer, size_t size);
     
     // Reconnection logic (for client mode)

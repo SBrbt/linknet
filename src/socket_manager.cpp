@@ -79,6 +79,8 @@ bool SocketManager::accept_connection() {
     remote_ip = std::string(inet_ntoa(client_addr.sin_addr));
     
     Logger::log(LogLevel::INFO, "Client connected from " + get_remote_endpoint());
+    Logger::log(LogLevel::DEBUG, "Server socket_fd set to: " + std::to_string(socket_fd) + 
+               ", is_connected: " + (is_connected ? "true" : "false"));
     return true;
 }
 
@@ -166,6 +168,7 @@ ssize_t SocketManager::receive_data(char* buffer, size_t buffer_size) {
         return 0;
     }
     
+    Logger::log(LogLevel::DEBUG, "Successfully received " + std::to_string(bytes_received) + " bytes");
     return bytes_received;
 }
 
