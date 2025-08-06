@@ -1,9 +1,9 @@
-# Makefile for LinkNet TUN Bridge
+# Makefile for LinkNet Multi-threaded TUN Bridge
 
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
 LDFLAGS = -lssl -lcrypto
-TARGET = tun_bridge
+TARGET = linknet
 SRCDIR = src
 BUILD_DIR = build
 
@@ -26,18 +26,6 @@ $(BUILD_DIR)/%.o: $(SRCDIR)/%.cpp | $(BUILD_DIR)
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
-# setup systemd service
-setup: $(TARGET)
-	./scripts/configure_service.sh
-
-# remove service
-remove: $(TARGET)
-	./scripts/uninstall_service.sh
-
-# Clean build artifacts
-clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
-
 # Check dependencies
 deps:
 	@echo "Checking system dependencies..."
@@ -46,4 +34,28 @@ deps:
 	@[ -c /dev/net/tun ] || (echo "Error: /dev/net/tun not found. TUN/TAP support required." && exit 1)
 	@echo "All dependencies satisfied."
 
-.PHONY: all clean deps
+# Generate random PSK
+generate-psk:
+	openssl rand -hex 32
+
+# Test performance
+test-performance:
+	@echo "Running performance tests..."
+	@chmod +x test_performance.sh
+	@sudo ./test_performance.sh
+
+# Interactive installation
+install: $(TARGET)
+	@echo "Starting interactive installation..."
+	@sudo ./scripts/install.sh
+
+# Uninstall service and binary
+uninstall:
+	@echo "Starting uninstall process..."
+	@sudo ./scripts/uninstall.sh
+
+# Clean build files
+clean:
+	rm -rf $(BUILD_DIR) $(TARGET)
+
+.PHONY: all clean deps install uninstall generate-psk test-performance

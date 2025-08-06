@@ -82,6 +82,7 @@ public:
     // Status
     bool is_authenticated() const { return authenticated; }
     bool needs_reauth() const;
+    void set_authenticated(bool auth_state) { authenticated = auth_state; }
     
     // Utilities
     static std::string generate_psk();

@@ -348,7 +348,9 @@ std::string RouteManager::execute_command_with_output(const std::string& command
 
 bool RouteManager::execute_command(const std::string& command) {
     Logger::log(LogLevel::DEBUG, "Executing: " + command);
-    int result = system(command.c_str());
+    
+    // Use global command executor for better performance
+    int result = g_command_executor.execute_command(command);
     return (result == 0);
 }
 

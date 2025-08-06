@@ -35,6 +35,7 @@ public:
     
     // Get socket file descriptor
     int get_fd() const { return socket_fd; }
+    int get_socket_fd() const { return socket_fd; }  // Alias for consistency
     
     // Check if connected
     bool is_socket_connected() const { return is_connected; }

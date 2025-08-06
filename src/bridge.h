@@ -5,77 +5,92 @@
 #include "tun_manager.h"
 #include "socket_manager.h"
 #include "crypto_manager.h"
-#include <chrono>
-#include <ctime>
-#include <algorithm>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+#include <memory>
+
+// Packet structure for queue
+struct Packet {
+    std::vector<uint8_t> data;
+    enum Type { TUN_TO_SOCKET, SOCKET_TO_TUN } type;
+    
+    Packet(const std::vector<uint8_t>& d, Type t) : data(d), type(t) {}
+};
 
 class Bridge {
 private:
-    TunManager& tun_manager;
-    SocketManager& socket_manager;
-    CryptoManager& crypto_manager;
+    // Components
+    TunManager* tun_manager;
+    SocketManager* socket_manager;
+    CryptoManager* crypto_manager;
     
-    std::atomic<bool> running;
-    std::atomic<bool> reconnecting;
+    // Threading
+    std::thread tun_reader_thread;
+    std::thread socket_reader_thread;
+    std::thread packet_processor_thread;
+    std::thread heartbeat_thread;
     
-    // Statistics
-    std::atomic<uint64_t> tun_to_socket_packets;
-    std::atomic<uint64_t> socket_to_tun_packets;
-    std::atomic<uint64_t> tun_to_socket_bytes;
-    std::atomic<uint64_t> socket_to_tun_bytes;
+    // Packet queues with locks
+    std::queue<std::shared_ptr<Packet>> packet_queue;
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
     
-    // Configuration
-    Config config;
+    // Authentication state
+    std::atomic<bool> is_authenticated;
+    std::atomic<bool> should_stop;
+    std::atomic<uint64_t> packets_processed;
+    std::atomic<uint64_t> bytes_transferred;
     
-    // Activity tracking
-    std::chrono::steady_clock::time_point last_activity;
-    std::mutex reconnect_mutex;
+    // Performance monitoring
+    std::chrono::high_resolution_clock::time_point last_stats_time;
+    std::mutex stats_mutex;
+    
+    // Connection management
+    std::string mode;
+    std::string remote_ip;
+    int port;
+    
+    // Threading functions
+    void tun_reader_loop();
+    void socket_reader_loop();
+    void packet_processor_loop();
+    void heartbeat_loop();
+    
+    // Packet processing
+    bool process_tun_packet(const std::vector<uint8_t>& packet);
+    bool process_socket_packet(const std::vector<uint8_t>& packet);
+    
+    // Authentication
+    bool handle_authentication();
+    bool send_auth_request();
+    bool send_auth_response();
+    
+    // Performance monitoring
+    void update_statistics(size_t bytes);
+    void print_performance_stats();
 
 public:
-    Bridge(TunManager& tun_mgr, SocketManager& socket_mgr, CryptoManager& crypto_mgr, const Config& cfg);
+    Bridge(TunManager* tun, SocketManager* socket, CryptoManager* crypto);
     ~Bridge();
     
-    // Start bridging (blocking)
+    // Control functions
+    bool initialize(const std::string& mode, const std::string& remote_ip = "", int port = 51860);
     bool start();
-    
-    // Stop bridging
     void stop();
     
-    // Check if bridge is running
-    bool is_running() const { return running.load(); }
+    // Status functions
+    bool is_running() const { return !should_stop; }
+    bool is_connected() const { return is_authenticated; }
     
-    // Print statistics
-    void print_statistics() const;
+    // Performance stats
+    uint64_t get_packets_processed() const { return packets_processed; }
+    uint64_t get_bytes_transferred() const { return bytes_transferred; }
     
-    // Reset statistics
-    void reset_statistics();
-
-private:
-    // Main single-threaded loop
-    void main_loop();
-    
-    // Authentication handling
-    bool perform_authentication();
-    bool attempt_authentication();
-    bool handle_auth_packet(const char* buffer, size_t size);
-    
-    // Reconnection logic (for client mode)
-    bool attempt_reconnection();
-    
-    // Update activity timestamp
-    void update_activity();
-    
-    // Check connection health
-    bool is_connection_healthy();
-    
-    // Send keepalive packet
-    bool send_keepalive();
-    
-    // Handle encrypted packets
-    bool handle_encrypted_packet(const char* buffer, size_t size);
-    
-    // Send encrypted data
-    bool send_encrypted_data(const char* data, size_t size);
+    // Connection management
+    bool wait_for_connection(int timeout_seconds = 30);
 };
 
 #endif // BRIDGE_H

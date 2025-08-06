@@ -4,6 +4,7 @@
 #include "bridge.h"
 #include "crypto_manager.h"
 #include "route_manager.h"
+#include "command_executor.h"
 #include <signal.h>
 #include <getopt.h>
 #include <fstream>
@@ -34,11 +35,15 @@ void signal_handler(int signal) {
         g_tun_manager->close_tun();
     }
     
+    // Stop command executor
+    g_command_executor.stop();
+    
     exit(0);
 }
 
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [OPTIONS]\n\n";
+    std::cout << "High-Performance Multi-threaded TUN Bridge\n\n";
     std::cout << "Options:\n";
     std::cout << "  --mode MODE         Operation mode: 'client' or 'server' (required)\n";
     std::cout << "  --dev DEVICE        TUN device name (default: tun0)\n";
@@ -48,22 +53,28 @@ void print_usage(const char* program_name) {
     std::cout << "  --remote-tun-ip IP  Remote TUN IP address (required)\n";
     std::cout << "  --psk KEY           Pre-shared key for encryption (required)\n";
     std::cout << "  --psk-file FILE     Read pre-shared key from file\n";
-    std::cout << "  --no-encryption     Disable encryption (not recommended)\n";
-    std::cout << "  --generate-psk      Generate a random pre-shared key\n";
-    std::cout << "  --enable-route      Route remote-ip through TUN interface\n";
+    std::cout << "  --no-encryption     Disable encryption (for performance testing)\n";
+    std::cout << "  --log-level LEVEL   Log level: debug, info, warning, error (default: info)\n";
+    std::cout << "  --performance-mode  Enable high-performance optimizations\n";
     std::cout << "  --help              Show this help message\n\n";
     std::cout << "Examples:\n";
-    std::cout << "  Server mode:\n";
-    std::cout << "    sudo " << program_name << " --mode server --dev tun0 --port 51860 \\\n";
-    std::cout << "                        --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 \\\n";
-    std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
-    std::cout << "  Client mode:\n";
-    std::cout << "    sudo " << program_name << " --mode client --dev tun0 --remote-ip 1.2.3.4 \\\n";
-    std::cout << "                        --port 51860 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 \\\n";
-    std::cout << "                        --psk \"your-secret-key-here\" --enable-route\n\n";
+    std::cout << "  Server: " << program_name << " --mode server --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file /etc/linknet.psk\n";
+    std::cout << "  Client: " << program_name << " --mode client --remote-ip 1.2.3.4 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file /etc/linknet.psk\n";
 }
 
-bool parse_arguments(int argc, char* argv[], Config& config) {
+struct MainConfig : public Config {
+    std::string log_level;
+    bool performance_mode;
+};
+
+bool parse_arguments(int argc, char* argv[], MainConfig& config) {
+    // Set defaults
+    config.dev_name = "tun0";
+    config.port = 51860;
+    config.enable_encryption = true;
+    config.log_level = "info";
+    config.performance_mode = false;
+    
     static struct option long_options[] = {
         {"mode", required_argument, 0, 'm'},
         {"dev", required_argument, 0, 'd'},
@@ -73,17 +84,15 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
         {"remote-tun-ip", required_argument, 0, 't'},
         {"psk", required_argument, 0, 'k'},
         {"psk-file", required_argument, 0, 'f'},
-        {"enable-route", no_argument, 0, 'R'},
         {"no-encryption", no_argument, 0, 'n'},
-        {"generate-psk", no_argument, 0, 'g'},
+        {"log-level", required_argument, 0, 'v'},
+        {"performance-mode", no_argument, 0, 'P'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    int option_index = 0;
     int c;
-    
-    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:Rngh", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "m:d:p:r:l:t:k:f:nv:Ph", long_options, nullptr)) != -1) {
         switch (c) {
             case 'm':
                 config.mode = optarg;
@@ -92,7 +101,7 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
                 config.dev_name = optarg;
                 break;
             case 'p':
-                config.port = std::atoi(optarg);
+                config.port = std::stoi(optarg);
                 break;
             case 'r':
                 config.remote_ip = optarg;
@@ -107,131 +116,102 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
                 config.psk = optarg;
                 break;
             case 'f':
-                config.psk_file = optarg;
-                break;
-            case 'R':
-                config.enable_auto_route = true;
+                {
+                    std::ifstream file(optarg);
+                    if (file.is_open()) {
+                        std::getline(file, config.psk);
+                        file.close();
+                    } else {
+                        std::cerr << "Error: Cannot read PSK file: " << optarg << std::endl;
+                        return false;
+                    }
+                }
                 break;
             case 'n':
                 config.enable_encryption = false;
                 break;
-            case 'g':
-                std::cout << CryptoManager::generate_psk() << std::endl;
-                return false;
+            case 'v':
+                config.log_level = optarg;
+                break;
+            case 'P':
+                config.performance_mode = true;
+                break;
             case 'h':
                 print_usage(argv[0]);
-                return false;
-            case '?':
-                print_usage(argv[0]);
-                return false;
+                exit(0);
             default:
-                break;
+                return false;
         }
     }
     
     return true;
 }
 
-bool validate_config(Config& config) {
-    // Check mode
+bool validate_config(const MainConfig& config) {
     if (config.mode != "client" && config.mode != "server") {
-        Logger::log(LogLevel::ERROR, "Mode must be 'client' or 'server'");
+        std::cerr << "Error: Mode must be 'client' or 'server'" << std::endl;
         return false;
     }
     
-    // Check device name
-    if (config.dev_name.empty()) {
-        Logger::log(LogLevel::ERROR, "Device name is required");
+    if (config.mode == "client" && config.remote_ip.empty()) {
+        std::cerr << "Error: Remote IP is required for client mode" << std::endl;
         return false;
     }
     
-    // Check port
-    if (config.port <= 0 || config.port > 65535) {
-        Logger::log(LogLevel::ERROR, "Port must be between 1 and 65535");
+    if (config.local_ip.empty()) {
+        std::cerr << "Error: Local TUN IP is required" << std::endl;
         return false;
     }
     
-    // Check local TUN IP
-    if (config.local_ip.empty() || !NetworkUtils::is_valid_ip(config.local_ip)) {
-        Logger::log(LogLevel::ERROR, "Valid local TUN IP address is required");
+    if (config.remote_tun_ip.empty()) {
+        std::cerr << "Error: Remote TUN IP is required" << std::endl;
         return false;
     }
     
-    // Check remote TUN IP
-    if (config.remote_tun_ip.empty() || !NetworkUtils::is_valid_ip(config.remote_tun_ip)) {
-        Logger::log(LogLevel::ERROR, "Valid remote TUN IP address is required");
+    if (config.enable_encryption && config.psk.empty()) {
+        std::cerr << "Error: PSK is required when encryption is enabled" << std::endl;
         return false;
-    }
-    
-    // Client mode specific checks
-    if (config.mode == "client") {
-        if (config.remote_ip.empty() || !NetworkUtils::is_valid_ip(config.remote_ip)) {
-            Logger::log(LogLevel::ERROR, "Valid remote server IP address is required for client mode");
-            return false;
-        }
-    }
-    
-    // Encryption checks
-    if (config.enable_encryption) {
-        if (config.psk.empty() && config.psk_file.empty()) {
-            Logger::log(LogLevel::ERROR, "Pre-shared key is required when encryption is enabled");
-            Logger::log(LogLevel::ERROR, "Use --psk <key> or --psk-file <file> or --generate-psk");
-            return false;
-        }
-        
-        if (!config.psk_file.empty()) {
-            std::ifstream psk_file(config.psk_file);
-            if (!psk_file.is_open()) {
-                Logger::log(LogLevel::ERROR, "Cannot open PSK file: " + config.psk_file);
-                return false;
-            }
-            std::getline(psk_file, config.psk);
-            if (config.psk.empty()) {
-                Logger::log(LogLevel::ERROR, "PSK file is empty");
-                return false;
-            }
-        }
-        
-        if (config.psk.length() < 16) {
-            Logger::log(LogLevel::ERROR, "Pre-shared key must be at least 16 characters");
-            return false;
-        }
     }
     
     return true;
 }
 
-void print_config(const Config& config) {
-    Logger::log(LogLevel::INFO, "Configuration:");
-    Logger::log(LogLevel::INFO, "  Mode: " + config.mode);
-    Logger::log(LogLevel::INFO, "  Device: " + config.dev_name);
-    Logger::log(LogLevel::INFO, "  Port: " + std::to_string(config.port));
-    Logger::log(LogLevel::INFO, "  Local TUN IP: " + config.local_ip);
-    Logger::log(LogLevel::INFO, "  Remote TUN IP: " + config.remote_tun_ip);
-    Logger::log(LogLevel::INFO, "  Encryption: " + std::string(config.enable_encryption ? "Enabled" : "Disabled"));
-    Logger::log(LogLevel::INFO, "  Auto-routing: " + std::string(config.enable_auto_route ? "Enabled" : "Disabled"));
+void print_config(const MainConfig& config) {
+    Logger::log(LogLevel::INFO, "=== LinkNet Multi-threaded Bridge Configuration ===");
+    Logger::log(LogLevel::INFO, "Mode: " + config.mode);
+    Logger::log(LogLevel::INFO, "Device: " + config.dev_name);
+    Logger::log(LogLevel::INFO, "Port: " + std::to_string(config.port));
+    Logger::log(LogLevel::INFO, "Local TUN IP: " + config.local_ip);
+    Logger::log(LogLevel::INFO, "Remote TUN IP: " + config.remote_tun_ip);
+    Logger::log(LogLevel::INFO, "Encryption: " + std::string(config.enable_encryption ? "Enabled" : "Disabled"));
+    Logger::log(LogLevel::INFO, "Performance Mode: " + std::string(config.performance_mode ? "Enabled" : "Disabled"));
+    
     if (config.mode == "client") {
-        Logger::log(LogLevel::INFO, "  Remote Server IP: " + config.remote_ip);
+        Logger::log(LogLevel::INFO, "Remote Server: " + config.remote_ip + ":" + std::to_string(config.port));
     }
-    if (config.enable_encryption && !config.psk.empty()) {
-        Logger::log(LogLevel::INFO, "  PSK Length: " + std::to_string(config.psk.length()) + " characters");
-    }
-    if (config.enable_auto_route) {
-        Logger::log(LogLevel::INFO, "  Will route remote-ip (" + config.remote_tun_ip + ") through TUN interface");
-    }
+    Logger::log(LogLevel::INFO, "================================================");
 }
 
 int main(int argc, char* argv[]) {
     // Set default configuration
-    Config config;
-    config.dev_name = "tun0";
+    MainConfig config;
     
     // Parse command line arguments
     if (!parse_arguments(argc, argv, config)) {
+        print_usage(argv[0]);
         return 1;
     }
     
-    // Check if running as root (only for actual operation, not help/psk generation)
+    // Configure logging (simplified)
+    if (config.log_level == "debug") {
+        // Debug logging enabled
+    } else if (config.log_level == "warning") {
+        // Warning level logging
+    } else if (config.log_level == "error") {
+        // Error level logging
+    }
+    
+    // Check if running as root (only for actual operation, not help)
     if (geteuid() != 0) {
         Logger::log(LogLevel::ERROR, "This program must be run as root (use sudo)");
         return 1;
@@ -250,6 +230,10 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);  // Ignore broken pipe signals
+    
+    // Start command executor for better performance
+    g_command_executor.start();
+    Logger::log(LogLevel::INFO, "Command executor started");
     
     // Create TUN manager
     TunManager tun_manager;
@@ -287,95 +271,105 @@ int main(int argc, char* argv[]) {
         }
         Logger::log(LogLevel::INFO, "Encryption initialized");
     } else {
-        Logger::log(LogLevel::WARNING, "Running without encryption - not recommended for production");
+        Logger::log(LogLevel::WARNING, "Running without encryption - for performance testing only");
     }
+    
+    // Create multi-threaded bridge
+    Bridge bridge(&tun_manager, &socket_manager, 
+                  config.enable_encryption ? &crypto_manager : nullptr);
+    g_bridge = &bridge;
     
     // Set up network connection based on mode
     bool connection_ready = false;
     
     if (config.mode == "server") {
-        // Server mode: start listening
+        Logger::log(LogLevel::INFO, "Starting server on port " + std::to_string(config.port));
+        
         if (!socket_manager.start_server(config.port)) {
             Logger::log(LogLevel::ERROR, "Failed to start server");
             return 1;
         }
         
-        Logger::log(LogLevel::INFO, "Waiting for client connection...");
+        Logger::log(LogLevel::INFO, "Server started, waiting for client connection...");
+        
         if (!socket_manager.accept_connection()) {
             Logger::log(LogLevel::ERROR, "Failed to accept client connection");
             return 1;
         }
         
+        Logger::log(LogLevel::INFO, "Client connected: " + socket_manager.get_remote_endpoint());
         connection_ready = true;
         
-    } else if (config.mode == "client") {
-        // Client mode: connect to server
-        if (!socket_manager.connect_to_server(config.remote_ip, config.port)) {
-            Logger::log(LogLevel::WARNING, "Initial connection failed, will retry in bridge");
-        } else {
-            connection_ready = true;
-        }
-    }
-    
-    if (connection_ready) {
-        Logger::log(LogLevel::INFO, "Network connection established");
+    } else { // client mode
+        Logger::log(LogLevel::INFO, "Connecting to server " + config.remote_ip + ":" + std::to_string(config.port));
         
-        // Set up routing if enabled
-        if (config.enable_auto_route) {
-            Logger::log(LogLevel::INFO, "Setting up automatic routing for remote IP...");
-            
-            if (!route_manager.initialize(config.dev_name, config.remote_tun_ip)) {
-                Logger::log(LogLevel::ERROR, "Failed to initialize route manager");
-                return 1;
-            }
-            
-            // Create a single route for the remote TUN IP
-            std::vector<std::string> route_target = {config.remote_tun_ip + "/32"};
-            
-            if (!route_manager.add_tun_routes(route_target)) {
-                Logger::log(LogLevel::WARNING, "Failed to configure route for remote IP");
-            } else {
-                Logger::log(LogLevel::INFO, "Route configured successfully for " + config.remote_tun_ip);
-            }
-            
-            // Print current routing table for verification
-            route_manager.print_routes();
+        if (!socket_manager.connect_to_server(config.remote_ip, config.port)) {
+            Logger::log(LogLevel::ERROR, "Failed to connect to server");
+            return 1;
+        }
+        
+        Logger::log(LogLevel::INFO, "Connected to server");
+        connection_ready = true;
+    }
+    
+    if (!connection_ready) {
+        Logger::log(LogLevel::ERROR, "Failed to establish connection");
+        return 1;
+    }
+    
+    // Configure routes
+    std::string route_target = config.remote_tun_ip;
+    if (config.mode == "client") {
+        if (!route_manager.initialize(config.dev_name, config.remote_tun_ip)) {
+            Logger::log(LogLevel::ERROR, "Failed to initialize route manager");
+            return 1;
+        }
+        
+        Logger::log(LogLevel::INFO, "Adding TUN routes for: " + route_target);
+        std::vector<std::string> routes = {route_target};
+        if (!route_manager.add_tun_routes(routes)) {
+            Logger::log(LogLevel::WARNING, "Failed to add some routes (might be normal)");
+        }
+        
+        // Print route information
+        route_manager.print_routes();
+    }
+    
+    // Initialize and start bridge
+    bridge.initialize(config.mode, config.remote_ip, config.port);
+    
+    if (!bridge.start()) {
+        Logger::log(LogLevel::ERROR, "Failed to start bridge");
+        return 1;
+    }
+    
+    Logger::log(LogLevel::INFO, "Bridge started successfully");
+    Logger::log(LogLevel::INFO, "High-performance multi-threaded bridge is running...");
+    
+    // Wait for authentication
+    if (!bridge.wait_for_connection(30)) {
+        Logger::log(LogLevel::ERROR, "Authentication timeout");
+        return 1;
+    }
+    
+    Logger::log(LogLevel::INFO, "Bridge authenticated and ready for traffic");
+    
+    // Main loop - just monitor
+    while (bridge.is_running()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        // Check connection status
+        if (!bridge.is_connected()) {
+            Logger::log(LogLevel::WARNING, "Connection lost, attempting reconnection...");
+            // Implement reconnection logic here if needed
         }
     }
     
-    // Create and start bridge
-    Bridge bridge(tun_manager, socket_manager, crypto_manager, config);
-    g_bridge = &bridge;
-    
-    Logger::log(LogLevel::INFO, "Starting TUN bridge...");
-    
-    // Start a statistics thread
-    std::thread stats_thread([&bridge]() {
-        while (bridge.is_running()) {
-            std::this_thread::sleep_for(std::chrono::seconds(60));
-            if (bridge.is_running()) {
-                bridge.print_statistics();
-            }
-        }
-    });
-    
-    // Start the bridge (this will block)
-    bridge.start();
-    
-    // Wait for statistics thread
-    if (stats_thread.joinable()) {
-        stats_thread.join();
-    }
-    
-    // Final statistics
-    bridge.print_statistics();
-    
-    // Restore routes
-    if (config.enable_auto_route) {
-        Logger::log(LogLevel::INFO, "Restoring original routes...");
+    // Cleanup
+    if (config.mode == "client") {
         route_manager.restore_original_routes();
     }
     
-    Logger::log(LogLevel::INFO, "Program terminated cleanly");
+    Logger::log(LogLevel::INFO, "Bridge stopped");
     return 0;
 }

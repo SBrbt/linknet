@@ -2,6 +2,7 @@
 #define TUN_MANAGER_H
 
 #include "utils.h"
+#include "command_executor.h"
 
 class TunManager {
 private:

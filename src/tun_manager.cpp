@@ -55,24 +55,24 @@ bool TunManager::configure_interface(const std::string& local_ip,
     this->local_ip = local_ip;
     this->netmask = netmask;
     
+    // Batch configuration commands for better performance
+    std::vector<std::string> config_commands;
+    
     // Bring interface up
-    std::string cmd = "ip link set " + dev_name + " up";
-    if (!execute_command(cmd)) {
-        Logger::log(LogLevel::ERROR, "Failed to bring up interface");
-        return false;
-    }
+    config_commands.push_back("ip link set " + dev_name + " up");
     
     // Set IP address
-    cmd = "ip addr add " + local_ip + "/32 dev " + dev_name;
-    if (!execute_command(cmd)) {
-        Logger::log(LogLevel::ERROR, "Failed to set IP address");
-        return false;
-    }
+    config_commands.push_back("ip addr add " + local_ip + "/32 dev " + dev_name);
     
     // Add route to remote peer (point-to-point)
     if (!remote_ip.empty()) {
-        cmd = "ip route add " + remote_ip + "/32 dev " + dev_name;
-        execute_command(cmd);  // This might fail if route exists, that's OK
+        config_commands.push_back("ip route add " + remote_ip + "/32 dev " + dev_name);
+    }
+    
+    // Execute all commands in batch
+    if (!g_command_executor.execute_batch(config_commands)) {
+        Logger::log(LogLevel::ERROR, "Failed to configure interface (some commands failed)");
+        return false;
     }
     
     Logger::log(LogLevel::INFO, "TUN interface configured: " + dev_name + 
@@ -128,6 +128,9 @@ void TunManager::close_tun() {
 
 bool TunManager::execute_command(const std::string& command) {
     Logger::log(LogLevel::DEBUG, "Executing: " + command);
-    int result = system(command.c_str());
+    
+    // Use global command executor for better performance
+    int result = g_command_executor.execute_command(command);
+    
     return (result == 0);
 }

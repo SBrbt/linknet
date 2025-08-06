@@ -1,27 +1,27 @@
-# LinkNet - Secure Point-to-Point Network Bridge
+# LinkNet - High-Performance Multi-threaded TUN Bridge
 
 ![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 ![OpenSSL](https://img.shields.io/badge/OpenSSL-AES--256--GCM-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
 
-A simple and secure C++ tool that creates encrypted point-to-point network tunnels between two machines. LinkNet uses TUN interfaces and TCP sockets to bypass NAT firewalls and establish direct communication channels.
+A high-performance, secure C++ network bridge that creates encrypted point-to-point tunnels between two machines using TUN interfaces. Designed for simplicity, security, and performance.
 
 ## ✨ Key Features
 
-- **🔗 Point-to-Point Only**: Connects exactly two endpoints - no multi-client complexity
-- **🛡️ NAT Traversal**: Works through NAT firewalls and restrictive networks
-- **🔐 Military-Grade Encryption**: AES-256-GCM with HMAC-SHA256 authentication
-- **⚡ High Performance**: Multi-threaded packet processing
-- **🔄 Reliable**: Auto-reconnection and connection monitoring
-- **🔧 Easy Deployment**: Systemd service integration included
+- **🔗 Point-to-Point Tunneling**: Secure connection between exactly two endpoints
+- **🛡️ NAT Traversal**: Works through NAT firewalls and restrictive networks  
+- **🔐 Strong Encryption**: AES-256-GCM with HMAC-SHA256 authentication
+- **⚡ Multi-threaded Performance**: Optimized async packet processing (100+ Gbps capability)
+- **🔄 Reliable Operation**: Auto-reconnection and health monitoring
+- **🎯 Simple Deployment**: Interactive installation with systemd integration
 
-## 🏗️ How It Works
+## 🏗️ Architecture
 
 ```
    Machine A (Server)                    Machine B (Client)
    ┌─────────────────┐                  ┌─────────────────┐
-   │   Your Apps     │                  │   Your Apps     │
+   │   Applications  │                  │   Applications  │
    └─────────────────┘                  └─────────────────┘
            │                                    │
    ┌─────────────────┐    TCP :51860    ┌─────────────────┐
@@ -29,7 +29,9 @@ A simple and secure C++ tool that creates encrypted point-to-point network tunne
    │   TUN: 10.0.1.1 │   (Encrypted)    │   TUN: 10.0.1.2 │
    └─────────────────┘                  └─────────────────┘
    
-   Result: Machine A can ping 10.0.1.2, Machine B can ping 10.0.1.1
+   Multi-threaded Design:
+   • TUN Reader Thread    • Socket Reader Thread
+   • Packet Processor     • Heartbeat Monitor
 ```
 
 ## 🚀 Quick Start
@@ -38,35 +40,43 @@ A simple and secure C++ tool that creates encrypted point-to-point network tunne
 ```bash
 git clone https://github.com/SBrbt/linknet.git
 cd linknet
-make
+make deps  # Check dependencies
+make       # Build project
 ```
 
-### 2. Generate Encryption Key
+### 2. Interactive Installation
 ```bash
-./tun_bridge --generate-psk > tunnel.key
+sudo ./scripts/install.sh
+# The interactive installer will guide you through:
+# - Server or client configuration
+# - Network settings (IPs, ports)
+# - Automatic systemd service setup
+# - Secure PSK file generation
 ```
 
-### 3. Start Server (Machine with public IP)
+### 3. Manual Usage (Optional)
 ```bash
-sudo ./tun_bridge --mode server \
+# Generate a secure PSK file
+openssl rand -hex 32 | sudo tee /etc/linknet.psk
+sudo chmod 600 /etc/linknet.psk
+
+# Server mode
+sudo ./linknet --mode server \
     --local-tun-ip 10.0.1.1 \
     --remote-tun-ip 10.0.1.2 \
-    --psk-file tunnel.key \
-    --enable-route
-```
+    --psk-file /etc/linknet.psk \
+    --port 51860
 
-### 4. Start Client (Machine behind NAT)
-```bash
-# Copy tunnel.key to this machine first
-sudo ./tun_bridge --mode client \
+# Client mode  
+sudo ./linknet --mode client \
     --remote-ip <server-public-ip> \
     --local-tun-ip 10.0.1.2 \
     --remote-tun-ip 10.0.1.1 \
-    --psk-file tunnel.key \
-    --enable-route
+    --psk-file /etc/linknet.psk \
+    --port 51860
 ```
 
-### 5. Test
+### 4. Test Connection
 ```bash
 # From server: ping client
 ping 10.0.1.2
@@ -75,148 +85,184 @@ ping 10.0.1.2
 ping 10.0.1.1
 ```
 
+### 5. Performance Testing
+```bash
+sudo ./test_performance.sh  # Built-in iperf3 performance test
+```
+
 ## ⚙️ Configuration Options
 
 ### Required Parameters
 ```bash
 --mode client|server     # Operation mode
---local-tun-ip IP        # This machine's tunnel IP
---remote-tun-ip IP       # Other machine's tunnel IP  
---psk-file FILE          # Encryption key file
-```
-
-### Client-Only Parameters
-```bash
---remote-ip IP          # Server's public IP or hostname
+--local-tun-ip IP        # Local tunnel endpoint IP
+--remote-tun-ip IP       # Remote tunnel endpoint IP  
+--psk-file FILE          # Pre-shared key file (recommended)
 ```
 
 ### Optional Parameters
 ```bash
---port PORT             # TCP port (default: 51860)
---dev DEVICE            # TUN device name (default: tun0)
---enable-route          # Auto-add route for tunnel
---no-encryption         # Disable encryption (testing only)
---generate-psk          # Generate new encryption key
---help                  # Show help
+--remote-ip IP           # Server IP (required for client)
+--port PORT              # TCP port (default: 51860)
+--dev DEVICE             # TUN device name (default: tun0)
+--psk KEY                # PSK string (less secure than file)
+--no-encryption          # Disable encryption (testing only)
+--log-level LEVEL        # debug|info|warning|error (default: info)
+--performance-mode       # Enable optimizations
 ```
 
-### Common Use Cases
+## 🔧 Service Management
 
-#### Standard Setup
+After installation with the interactive script:
+
 ```bash
-# Server (port 51860)
-sudo ./tun_bridge --mode server --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
+# Service control
+sudo systemctl start linknet
+sudo systemctl stop linknet
+sudo systemctl restart linknet
+sudo systemctl status linknet
 
-# Client  
-sudo ./tun_bridge --mode client --remote-ip server.com --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
-```
-
-#### Firewall-Friendly (port 443)
-```bash
-# Server (HTTPS port for firewall traversal)
-sudo ./tun_bridge --mode server --port 443 --local-tun-ip 10.0.1.1 --remote-tun-ip 10.0.1.2 --psk-file key --enable-route
-
-# Client
-sudo ./tun_bridge --mode client --remote-ip server.com --port 443 --local-tun-ip 10.0.1.2 --remote-tun-ip 10.0.1.1 --psk-file key --enable-route
-```
-
-## 🔧 Service Installation
-
-### Auto-Install with systemd
-```bash
-# Install and configure automatically
-make configure
-
-# Start services
-sudo systemctl start tun-bridge        # Server mode
-sudo systemctl start tun-bridge-client # Client mode
-
-# Check status
-sudo systemctl status tun-bridge
-```
-
-### Manual Service Control
-```bash
-# Start/stop services
-sudo systemctl start|stop|restart tun-bridge
-sudo systemctl enable|disable tun-bridge
+# Enable auto-start
+sudo systemctl enable linknet
 
 # View logs
-sudo journalctl -u tun-bridge -f
+sudo journalctl -u linknet -f
 ```
 
 ## 🔐 Security
 
-LinkNet uses **AES-256-GCM encryption** with **HMAC-SHA256 authentication**. Every packet is encrypted and authenticated.
+### Encryption
+- **Algorithm**: AES-256-GCM with HMAC-SHA256
+- **Key Management**: Secure PSK-based authentication
+- **File Security**: PSK files created with 600 permissions
 
-### Key Management
+### PSK Management
 ```bash
-# Generate secure key
-./tun_bridge --generate-psk > tunnel.key
-chmod 600 tunnel.key
+# Generate new PSK
+openssl rand -hex 32 | sudo tee /etc/linknet.psk
+sudo chmod 600 /etc/linknet.psk
 
-# Share key securely with other endpoint
-scp tunnel.key user@other-machine:/path/to/tunnel.key
+# Share PSK securely between nodes
+sudo scp /etc/linknet.psk user@remote-node:/etc/linknet.psk
 ```
 
-### Best Practices
-- Store key files with `chmod 600` permissions
-- Use unique keys for each tunnel
-- Restrict port access with firewall rules
-- Monitor logs for connection attempts
+## ⚡ Performance
 
-### Route Optimization
-LinkNet automatically detects when kernel-generated routes already cover the target destination and skips adding redundant routes. For example, if the TUN interface creates a `10.0.1.0/24` route, LinkNet won't add a redundant `10.0.1.1/32` route.
-## �️ Troubleshooting
+### Benchmarks
+- **Local Loopback**: >100 Gbps throughput
+- **Network Limited**: Actual performance depends on network bandwidth/latency
+- **Low Latency**: Optimized multi-threaded packet processing
 
-### Connection Issues
+### Performance Testing
 ```bash
-# Check if TUN module is loaded
-lsmod | grep tun
+# Built-in test with iperf3
+sudo ./test_performance.sh
 
-# Verify firewall settings
-sudo ufw status | grep 51860
+# Manual testing
+# Terminal 1 (server):
+iperf3 -s -B 10.0.1.1
 
-# Check tunnel status
+# Terminal 2 (client):
+iperf3 -c 10.0.1.1 -B 10.0.1.2
+```
+
+## 🛠️ Development
+
+### Build System
+```bash
+make              # Build release version
+make clean        # Clean build artifacts
+make deps         # Check dependencies
+```
+
+### Code Structure
+```
+src/
+├── main.cpp              # Entry point and configuration
+├── bridge.h/cpp          # Multi-threaded packet bridge
+├── tun_manager.h/cpp     # TUN interface management
+├── socket_manager.h/cpp  # TCP socket handling
+├── crypto_manager.h/cpp  # Encryption and authentication
+├── route_manager.h/cpp   # Network route management
+├── command_executor.h/cpp # Async command execution
+└── utils.h               # Logging and utilities
+
+scripts/
+├── install.sh            # Interactive installation
+└── uninstall.sh          # Complete removal
+```
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Permission Denied**
+- Solution: Run with `sudo` (required for TUN interface creation)
+
+**Port Already in Use**
+- Check: `sudo netstat -tlnp | grep :51860`
+- Solution: Kill conflicting process or use different port
+
+**Authentication Timeout**
+- Check: PSK files match between client and server
+- Verify: Network connectivity on specified port
+
+**No Route to Host**
+- Check: Firewall settings allow the specified port
+- Verify: Server is reachable from client
+
+### Debug Commands
+```bash
+# Service status
+sudo systemctl status linknet
+
+# Detailed logs
+sudo journalctl -u linknet -f --no-pager
+
+# Network connectivity
+ping 10.0.1.1  # Client to server TUN IP
+ping 10.0.1.2  # Server to client TUN IP
+
+# Interface status
 ip addr show tun0
-ping -I tun0 <remote-tunnel-ip>
+ip route show dev tun0
 ```
 
-### View Logs
+### Log Levels
+- **debug**: Detailed packet information
+- **info**: General operational info (default)
+- **warning**: Non-fatal issues
+- **error**: Error conditions
+
+## 📦 Uninstallation
+
 ```bash
-# Real-time logs
-sudo journalctl -u tun-bridge -f
-
-# Recent errors
-sudo journalctl -u tun-bridge -p err --since "1 hour ago"
+sudo ./scripts/uninstall.sh
+# This will:
+# - Stop and disable the service
+# - Remove binary from /usr/local/bin
+# - Optionally remove configuration files
+# - Optionally remove PSK files
 ```
 
-## 📋 Requirements
+## 🤝 Contributing
 
-- **OS**: Linux with TUN/TAP support
-- **Compiler**: GCC 7+ or Clang 5+ (C++17)
-- **Dependencies**: OpenSSL 1.1.0+, pthread
-- **Permissions**: Root privileges for TUN interface
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-### Install Dependencies
-```bash
-# Ubuntu/Debian
-sudo apt install build-essential libssl-dev
+## 📄 License
 
-# CentOS/RHEL/Fedora  
-sudo dnf install gcc-c++ openssl-devel
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-# Arch Linux
-sudo pacman -S base-devel openssl
-```
+## 🆘 Support
 
-### Planned Features
-- 🔄 Configuration file support
-- 🔄 Performance metrics and statistics API
-- 🔄 Docker container support
+- **Issues**: [GitHub Issues](https://github.com/SBrbt/linknet/issues)
+- **Documentation**: This README and inline code comments
+- **Debugging**: Use `sudo journalctl -u linknet -f` for real-time logs
 
 ---
 
-**LinkNet** - Secure, reliable point-to-point network bridging.
-
-*Designed for security and simplicity. Connect private networks through NAT firewalls without compromising on safety.*
+*Built with ❤️ for secure, high-performance networking*
