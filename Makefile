@@ -5,30 +5,42 @@ CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
 LDFLAGS = -lssl -lcrypto
 TARGET = tun_bridge
 SRCDIR = src
-OBJDIR = obj
+BUILD_DIR = build
 
 # Source files
 SOURCES = $(wildcard $(SRCDIR)/*.cpp)
-OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(BUILD_DIR)/%.o)
 
 # Default target
 all: $(TARGET)
 
 # Create object directory
-$(OBJDIR):
-	mkdir -p $(OBJDIR)
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
 # Compile source files to object files
-$(OBJDIR)/%.o: $(SRCDIR)/%.cpp | $(OBJDIR)
+$(BUILD_DIR)/%.o: $(SRCDIR)/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Link object files to create executable
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
+# install as systemd service
+install: $(TARGET)
+	./scripts/install_service.sh
+
+# uninstall service
+uninstall: $(TARGET)
+	./scripts/uninstall_service.sh
+
+# configure service
+configure: $(TARGET)
+	./scripts/configure_service.sh
+
 # Clean build artifacts
 clean:
-	rm -rf $(OBJDIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET)
 
 # Check dependencies
 deps:
