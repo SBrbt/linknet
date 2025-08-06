@@ -191,14 +191,17 @@ void Bridge::socket_to_tun_loop() {
         // Read data from socket
         ssize_t bytes_read = socket_manager.receive_data(buffer, sizeof(buffer));
         if (bytes_read < 0) {
+            Logger::log(LogLevel::DEBUG, "Socket receive error");
             continue;
         }
-        
+
         if (bytes_read == 0) {
             // Connection closed
             Logger::log(LogLevel::INFO, "Socket connection closed");
             continue;
         }
+
+        Logger::log(LogLevel::DEBUG, "Received " + std::to_string(bytes_read) + " bytes from socket");
         
         // Handle encrypted packet (includes auth, data, keepalive)
         handle_encrypted_packet(buffer, bytes_read);
