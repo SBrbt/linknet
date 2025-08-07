@@ -2,6 +2,7 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <cstring>
+#include <arpa/inet.h>
 
 Bridge::Bridge(TunManager* tun, SocketManager* socket, CryptoManager* crypto)
     : tun_manager(tun), socket_manager(socket), crypto_manager(crypto),
@@ -288,12 +289,23 @@ bool Bridge::process_tun_packet(const std::vector<uint8_t>& packet) {
 }
 
 bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
-    // Check if this is an authentication packet (check packet structure, not string)
-    if (packet.size() >= 1) {
+    // Check if this is an authentication packet (check packet structure properly)
+    if (packet.size() >= sizeof(EncryptedHeader)) {
         uint8_t packet_type = packet[0];
-        // Check for CryptoManager authentication packet types
-        if (packet_type == 0x01 || packet_type == 0x02 || packet_type == 0x03 || packet_type == 0x04) {
-            return handle_auth_packet(packet);
+        // Check for CryptoManager authentication packet types and validate size
+        if ((packet_type == 0x01 || packet_type == 0x02 || packet_type == 0x03 || packet_type == 0x04)) {
+            // Additional validation: check if this looks like a real auth packet
+            const EncryptedHeader* header = reinterpret_cast<const EncryptedHeader*>(packet.data());
+            uint32_t data_length = ntohl(header->data_length);
+            
+            // Validate packet structure
+            if (packet.size() == sizeof(EncryptedHeader) + data_length) {
+                Logger::log(LogLevel::DEBUG, "Detected auth packet type: 0x" + std::to_string(packet_type) + 
+                           ", size: " + std::to_string(packet.size()));
+                return handle_auth_packet(packet);
+            } else {
+                Logger::log(LogLevel::DEBUG, "Invalid auth packet structure, treating as data packet");
+            }
         }
     }
     
@@ -372,6 +384,9 @@ bool Bridge::handle_auth_packet(const std::vector<uint8_t>& packet) {
         Logger::log(LogLevel::WARNING, "No crypto manager available for authentication");
         return false;
     }
+    
+    Logger::log(LogLevel::DEBUG, "Processing auth packet, size: " + std::to_string(packet.size()) + ", type: 0x" + 
+                std::to_string(packet.size() > 0 ? (int)packet[0] : -1));
     
     if (mode == "server") {
         // Server handles authentication request from client
