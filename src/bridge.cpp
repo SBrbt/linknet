@@ -1,6 +1,7 @@
 #include "bridge.h"
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <cstring>
 
 Bridge::Bridge(TunManager* tun, SocketManager* socket, CryptoManager* crypto)
     : tun_manager(tun), socket_manager(socket), crypto_manager(crypto),
@@ -218,13 +219,21 @@ void Bridge::heartbeat_loop() {
         
         auto now = std::chrono::steady_clock::now();
         
-        // Send heartbeat every 10 seconds
+        // Send encrypted keepalive every 10 seconds
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_heartbeat).count() >= 10) {
-            if (is_authenticated && socket_manager->get_socket_fd() >= 0) {
-                // Send heartbeat packet
-                std::string heartbeat = "HEARTBEAT";
-                socket_manager->send_data(heartbeat.c_str(), heartbeat.length());
-                Logger::log(LogLevel::DEBUG, "Heartbeat sent");
+            if (is_authenticated && socket_manager->get_socket_fd() >= 0 && crypto_manager) {
+                // Create proper encrypted keepalive packet using CryptoManager
+                char keepalive_data[] = "KEEPALIVE";
+                char wrapped_buffer[128];
+                size_t wrapped_size = sizeof(wrapped_buffer);
+                
+                if (crypto_manager->wrap_data_packet(keepalive_data, strlen(keepalive_data), 
+                                                    wrapped_buffer, wrapped_size)) {
+                    socket_manager->send_data(wrapped_buffer, wrapped_size);
+                    Logger::log(LogLevel::DEBUG, "Encrypted keepalive sent");
+                } else {
+                    Logger::log(LogLevel::WARNING, "Failed to create encrypted keepalive packet");
+                }
             }
             last_heartbeat = now;
         }
@@ -246,22 +255,21 @@ bool Bridge::process_tun_packet(const std::vector<uint8_t>& packet) {
     
     try {
         if (crypto_manager) {
-            // Encrypt packet - use dynamic buffer size
-            // AES-256-CBC requires: IV(16) + encrypted_data + possible padding(16) + tag(16)
-            size_t max_encrypted_size = packet.size() + 64; // Extra space for IV, padding, tag
-            std::vector<char> encrypted_buffer(max_encrypted_size);
-            size_t encrypted_size = max_encrypted_size;
+            // Use CryptoManager's proper wrap_data_packet (includes HMAC verification)
+            size_t max_wrapped_size = packet.size() + 128; // Extra space for header, IV, padding, HMAC
+            std::vector<char> wrapped_buffer(max_wrapped_size);
+            size_t wrapped_size = max_wrapped_size;
             
-            if (!crypto_manager->encrypt_packet(reinterpret_cast<const char*>(packet.data()), 
-                                               packet.size(), encrypted_buffer.data(), encrypted_size)) {
-                Logger::log(LogLevel::ERROR, "Failed to encrypt TUN packet, size: " + std::to_string(packet.size()));
+            if (!crypto_manager->wrap_data_packet(reinterpret_cast<const char*>(packet.data()), 
+                                                 packet.size(), wrapped_buffer.data(), wrapped_size)) {
+                Logger::log(LogLevel::ERROR, "Failed to wrap TUN packet, size: " + std::to_string(packet.size()));
                 return false;
             }
             
-            Logger::log(LogLevel::DEBUG, "Encrypted packet: " + std::to_string(packet.size()) + " -> " + std::to_string(encrypted_size) + " bytes");
+            Logger::log(LogLevel::DEBUG, "Wrapped packet: " + std::to_string(packet.size()) + " -> " + std::to_string(wrapped_size) + " bytes");
             
-            if (socket_manager->send_data(encrypted_buffer.data(), encrypted_size) <= 0) {
-                Logger::log(LogLevel::WARNING, "Failed to send encrypted packet to socket");
+            if (socket_manager->send_data(wrapped_buffer.data(), wrapped_size) <= 0) {
+                Logger::log(LogLevel::WARNING, "Failed to send wrapped packet to socket");
                 return false;
             }
         } else {
@@ -280,10 +288,13 @@ bool Bridge::process_tun_packet(const std::vector<uint8_t>& packet) {
 }
 
 bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
-    // Check if this is an authentication packet
-    std::string packet_str(packet.begin(), packet.end());
-    if (packet_str.find("AUTH_") == 0) {
-        return handle_auth_packet(packet);
+    // Check if this is an authentication packet (check packet structure, not string)
+    if (packet.size() >= 1) {
+        uint8_t packet_type = packet[0];
+        // Check for CryptoManager authentication packet types
+        if (packet_type == 0x01 || packet_type == 0x02 || packet_type == 0x03 || packet_type == 0x04) {
+            return handle_auth_packet(packet);
+        }
     }
     
     if (!is_authenticated) {
@@ -291,29 +302,29 @@ bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
         return false;
     }
     
-    // Check if this is a heartbeat packet
-    if (packet_str == "HEARTBEAT") {
-        Logger::log(LogLevel::DEBUG, "Heartbeat received");
+    // Check if this is a keepalive packet (properly encrypted)
+    if (packet.size() >= 1 && packet[0] == 0x20) {
+        Logger::log(LogLevel::DEBUG, "Encrypted keepalive received");
         return true;
     }
     
     try {
         if (crypto_manager) {
-            // Decrypt packet - use dynamic buffer size
-            size_t max_decrypted_size = packet.size() + 64; // Extra space for safety
-            std::vector<char> decrypted_buffer(max_decrypted_size);
-            size_t decrypted_size = max_decrypted_size;
+            // Use CryptoManager's proper unwrap_data_packet (includes HMAC verification)
+            size_t max_unwrapped_size = packet.size() + 64; // Extra space for safety
+            std::vector<char> unwrapped_buffer(max_unwrapped_size);
+            size_t unwrapped_size = max_unwrapped_size;
             
-            if (!crypto_manager->decrypt_packet(reinterpret_cast<const char*>(packet.data()), 
-                                               packet.size(), decrypted_buffer.data(), decrypted_size)) {
-                Logger::log(LogLevel::ERROR, "Failed to decrypt socket packet, size: " + std::to_string(packet.size()));
+            if (!crypto_manager->unwrap_data_packet(reinterpret_cast<const char*>(packet.data()), 
+                                                   packet.size(), unwrapped_buffer.data(), unwrapped_size)) {
+                Logger::log(LogLevel::ERROR, "Failed to unwrap socket packet, size: " + std::to_string(packet.size()) + " (HMAC verification failed or PSK mismatch)");
                 return false;
             }
             
-            Logger::log(LogLevel::DEBUG, "Decrypted packet: " + std::to_string(packet.size()) + " -> " + std::to_string(decrypted_size) + " bytes");
+            Logger::log(LogLevel::DEBUG, "Unwrapped packet: " + std::to_string(packet.size()) + " -> " + std::to_string(unwrapped_size) + " bytes");
             
-            if (tun_manager->write_packet(decrypted_buffer.data(), decrypted_size) <= 0) {
-                Logger::log(LogLevel::WARNING, "Failed to write decrypted packet to TUN");
+            if (tun_manager->write_packet(unwrapped_buffer.data(), unwrapped_size) <= 0) {
+                Logger::log(LogLevel::WARNING, "Failed to write unwrapped packet to TUN");
                 return false;
             }
         } else {
@@ -337,14 +348,14 @@ bool Bridge::handle_authentication() {
         return true;
     }
     
-    Logger::log(LogLevel::INFO, "Performing authentication handshake...");
+    Logger::log(LogLevel::INFO, "Performing PSK-based authentication handshake...");
     
     bool result = false;
     if (mode == "client") {
         result = send_auth_request();
     } else {
         // Server waits for client auth request, doesn't initiate
-        Logger::log(LogLevel::INFO, "Server waiting for client authentication");
+        Logger::log(LogLevel::INFO, "Server waiting for client PSK authentication");
         result = true;
     }
     
@@ -356,68 +367,82 @@ bool Bridge::handle_authentication() {
 }
 
 bool Bridge::handle_auth_packet(const std::vector<uint8_t>& packet) {
-    std::string packet_str(packet.begin(), packet.end());
+    // Use CryptoManager's proper authentication protocol instead of simple string matching
+    if (!crypto_manager) {
+        Logger::log(LogLevel::WARNING, "No crypto manager available for authentication");
+        return false;
+    }
     
-    if (packet_str == "AUTH_REQUEST") {
-        if (mode == "server") {
-            Logger::log(LogLevel::INFO, "Received authentication request from client");
-            return send_auth_response();
+    if (mode == "server") {
+        // Server handles authentication request from client
+        char response_buffer[512];
+        size_t response_size = sizeof(response_buffer);
+        
+        if (crypto_manager->handle_auth_request(reinterpret_cast<const char*>(packet.data()), 
+                                               packet.size(), response_buffer, response_size)) {
+            // Send authentication response
+            if (socket_manager->send_data(response_buffer, response_size) > 0) {
+                is_authenticated = true;
+                auth_in_progress = false;
+                Logger::log(LogLevel::INFO, "Server PSK authentication successful - client verified");
+                return true;
+            } else {
+                Logger::log(LogLevel::ERROR, "Failed to send authentication response");
+                auth_failures++;
+                return false;
+            }
         } else {
-            Logger::log(LogLevel::WARNING, "Client received AUTH_REQUEST - protocol error");
+            Logger::log(LogLevel::WARNING, "Client authentication failed - PSK mismatch or invalid request");
+            auth_failures++;
             return false;
         }
-    } else if (packet_str == "AUTH_OK") {
-        if (mode == "client") {
-            Logger::log(LogLevel::INFO, "Received authentication success from server");
+    } else if (mode == "client") {
+        // Client handles authentication response from server
+        if (crypto_manager->handle_auth_response(reinterpret_cast<const char*>(packet.data()), packet.size())) {
             is_authenticated = true;
             auth_in_progress = false;
-            
-            // Set crypto manager authenticated state if encryption is enabled
-            if (crypto_manager) {
-                crypto_manager->set_authenticated(true);
-                Logger::log(LogLevel::INFO, "Crypto manager authenticated");
-            }
-            
-            Logger::log(LogLevel::INFO, "Client authentication successful");
+            Logger::log(LogLevel::INFO, "Client PSK authentication successful - server verified");
             return true;
         } else {
-            Logger::log(LogLevel::WARNING, "Server received AUTH_OK - protocol error");
+            Logger::log(LogLevel::WARNING, "Server authentication failed - PSK mismatch or invalid response");
+            auth_failures++;
             return false;
         }
     }
     
-    Logger::log(LogLevel::WARNING, "Unknown authentication packet: " + packet_str);
+    Logger::log(LogLevel::WARNING, "Unknown authentication packet or mode");
     return false;
 }
 
 bool Bridge::send_auth_request() {
-    const std::string auth_message = "AUTH_REQUEST";
-    if (socket_manager->send_data(auth_message.c_str(), auth_message.length()) <= 0) {
-        Logger::log(LogLevel::ERROR, "Failed to send authentication request");
+    if (!crypto_manager) {
+        Logger::log(LogLevel::ERROR, "No crypto manager available for authentication");
         return false;
     }
-    Logger::log(LogLevel::INFO, "Authentication request sent");
-    return true;
+    
+    // Use CryptoManager's proper PSK-based authentication
+    char auth_buffer[512];
+    size_t auth_size = sizeof(auth_buffer);
+    
+    if (crypto_manager->create_auth_request(auth_buffer, auth_size)) {
+        if (socket_manager->send_data(auth_buffer, auth_size) > 0) {
+            Logger::log(LogLevel::INFO, "PSK-based authentication request sent");
+            return true;
+        } else {
+            Logger::log(LogLevel::ERROR, "Failed to send PSK authentication request");
+            return false;
+        }
+    } else {
+        Logger::log(LogLevel::ERROR, "Failed to create PSK authentication request");
+        return false;
+    }
 }
 
 bool Bridge::send_auth_response() {
-    const std::string auth_response = "AUTH_OK";
-    if (socket_manager->send_data(auth_response.c_str(), auth_response.length()) <= 0) {
-        Logger::log(LogLevel::ERROR, "Failed to send authentication response");
-        return false;
-    }
-    
-    is_authenticated = true;
-    auth_in_progress = false;
-    
-    // Set crypto manager authenticated state if encryption is enabled
-    if (crypto_manager) {
-        crypto_manager->set_authenticated(true);
-        Logger::log(LogLevel::INFO, "Crypto manager authenticated");
-    }
-    
-    Logger::log(LogLevel::INFO, "Server authentication successful");
-    return true;
+    // This method is no longer used - authentication responses are handled 
+    // directly in handle_auth_packet() using CryptoManager
+    Logger::log(LogLevel::WARNING, "Deprecated send_auth_response() called - using CryptoManager instead");
+    return false;
 }
 
 void Bridge::update_statistics(size_t bytes, bool sent) {
