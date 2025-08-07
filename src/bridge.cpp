@@ -314,16 +314,10 @@ bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
         return false;
     }
     
-    // Check if this is a keepalive packet (properly encrypted)
-    if (packet.size() >= 1 && packet[0] == 0x20) {
-        Logger::log(LogLevel::DEBUG, "Encrypted keepalive received");
-        return true;
-    }
-    
     try {
         if (crypto_manager) {
-            // Use CryptoManager's proper unwrap_data_packet (includes HMAC verification)
-            size_t max_unwrapped_size = packet.size() + 64; // Extra space for safety
+            // Decrypt and check if it's a keepalive or data packet
+            size_t max_unwrapped_size = packet.size() + 64;
             std::vector<char> unwrapped_buffer(max_unwrapped_size);
             size_t unwrapped_size = max_unwrapped_size;
             
@@ -335,19 +329,36 @@ bool Bridge::process_socket_packet(const std::vector<uint8_t>& packet) {
             
             Logger::log(LogLevel::DEBUG, "Unwrapped packet: " + std::to_string(packet.size()) + " -> " + std::to_string(unwrapped_size) + " bytes");
             
+            // Check if this is a keepalive packet
+            if (unwrapped_size >= 9 && std::string(unwrapped_buffer.data(), 9) == "KEEPALIVE") {
+                Logger::log(LogLevel::DEBUG, "Encrypted keepalive received and processed");
+                return true;
+            }
+            
+            // Debug: Check unwrapped data validity for IP packets
+            if (unwrapped_size > 0) {
+                uint8_t version = (unwrapped_buffer[0] >> 4) & 0x0F;
+                Logger::log(LogLevel::DEBUG, "Unwrapped packet IP version: " + std::to_string(version) + 
+                           ", first bytes: " + std::to_string((uint8_t)unwrapped_buffer[0]) + " " + 
+                           (unwrapped_size > 1 ? std::to_string((uint8_t)unwrapped_buffer[1]) : "N/A"));
+            }
+            
+            // Write to TUN as normal IP packet
             if (tun_manager->write_packet(unwrapped_buffer.data(), unwrapped_size) <= 0) {
                 Logger::log(LogLevel::WARNING, "Failed to write unwrapped packet to TUN");
                 return false;
             }
+            
+            return true;
         } else {
             // Write unencrypted
             if (tun_manager->write_packet(reinterpret_cast<const char*>(packet.data()), packet.size()) <= 0) {
                 Logger::log(LogLevel::WARNING, "Failed to write packet to TUN");
                 return false;
             }
+            return true;
         }
         
-        return true;
     } catch (const std::exception& e) {
         Logger::log(LogLevel::ERROR, "Exception in process_socket_packet: " + std::string(e.what()));
         return false;
