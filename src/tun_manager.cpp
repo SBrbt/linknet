@@ -46,7 +46,8 @@ bool TunManager::create_tun(const std::string& dev_name) {
 
 bool TunManager::configure_interface(const std::string& local_ip,
                                     const std::string& remote_ip, 
-                                    const std::string& netmask) {
+                                    const std::string& netmask,
+                                    int mtu) {
     if (!is_open) {
         Logger::log(LogLevel::ERROR, "TUN interface not open");
         return false;
@@ -57,6 +58,9 @@ bool TunManager::configure_interface(const std::string& local_ip,
     
     // Batch configuration commands for better performance
     std::vector<std::string> config_commands;
+    
+    // Set proper MTU for VPN (account for encryption overhead)
+    config_commands.push_back("ip link set " + dev_name + " mtu " + std::to_string(mtu));
     
     // Bring interface up
     config_commands.push_back("ip link set " + dev_name + " up");

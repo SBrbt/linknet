@@ -24,7 +24,7 @@
 
 // Buffer size for packet processing
 #define BUFFER_SIZE 4096
-#define MTU_SIZE 1500
+#define MTU_SIZE 1408        // TUN MTU: 1500 - VPN overhead (56 + 20 + 16) = 1408
 
 // Log levels
 enum class LogLevel {
@@ -170,9 +170,10 @@ struct Config {
     std::string dev_name;       // TUN device name (e.g., "tun0")
     std::string remote_ip;      // Remote server IP (client mode)
     int port;                   // TCP port
-    std::string local_ip;       // Local TUN IP
+    std::string local_tun_ip;       // Local TUN IP
     std::string remote_tun_ip;  // Remote TUN IP
     std::string netmask;        // TUN netmask
+    int tun_mtu;               // TUN interface MTU
     bool enable_keepalive;      // TCP keepalive
     int reconnect_interval;     // Reconnection interval in seconds
     
@@ -185,7 +186,7 @@ struct Config {
     bool enable_auto_route;     // Enable automatic routing for remote-ip
     std::string default_route_interface;      // Save original default route interface
     
-    Config() : port(51860), netmask("255.255.255.0"), 
+    Config() : port(51860), netmask("255.255.255.0"), tun_mtu(1408),
                enable_keepalive(true), reconnect_interval(5),
                enable_encryption(true), enable_auto_route(false) {}
                
@@ -209,8 +210,8 @@ struct Config {
             errors.push_back("Invalid port number: " + std::to_string(port));
         }
         
-        if (local_ip.empty() || !NetworkUtils::is_valid_ip(local_ip)) {
-            errors.push_back("Invalid local TUN IP: " + local_ip);
+        if (local_tun_ip.empty() || !NetworkUtils::is_valid_ip(local_tun_ip)) {
+            errors.push_back("Invalid local TUN IP: " + local_tun_ip);
         }
         
         if (remote_tun_ip.empty() || !NetworkUtils::is_valid_ip(remote_tun_ip)) {
@@ -227,6 +228,10 @@ struct Config {
         
         if (dev_name.length() > 15) { // IFNAMSIZ - 1
             errors.push_back("Device name too long (max 15 characters)");
+        }
+        
+        if (tun_mtu < 576 || tun_mtu > 1408) {
+            errors.push_back("TUN MTU must be between 576 and 1408 bytes");
         }
         
         return errors;

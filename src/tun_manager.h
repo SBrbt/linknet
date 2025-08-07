@@ -27,7 +27,8 @@ public:
     // Configure TUN interface with IP
     bool configure_interface(const std::string& local_ip,
                             const std::string& remote_ip,
-                           const std::string& netmask = "255.255.255.0");
+                            const std::string& netmask = "255.255.255.0",
+                            int mtu = 1408);
     
     // Read packet from TUN interface with timeout
     ssize_t read_packet(char* buffer, size_t buffer_size, int timeout_ms = -1);

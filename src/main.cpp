@@ -103,7 +103,7 @@ bool parse_arguments(int argc, char* argv[], MainConfig& config) {
                 config.remote_ip = optarg;
                 break;
             case 'l':
-                config.local_ip = optarg;
+                config.local_tun_ip = optarg;
                 break;
             case 't':
                 config.remote_tun_ip = optarg;
@@ -113,6 +113,7 @@ bool parse_arguments(int argc, char* argv[], MainConfig& config) {
                 break;
             case 'f':
                 {
+                    config.psk_file = optarg;
                     std::ifstream file(optarg);
                     if (file.is_open()) {
                         std::getline(file, config.psk);
@@ -151,7 +152,7 @@ bool validate_config(const MainConfig& config) {
         return false;
     }
     
-    if (config.local_ip.empty()) {
+    if (config.local_tun_ip.empty()) {
         std::cerr << "Error: Local TUN IP is required" << std::endl;
         return false;
     }
@@ -174,7 +175,7 @@ void print_config(const MainConfig& config) {
     Logger::log(LogLevel::INFO, "Mode: " + config.mode);
     Logger::log(LogLevel::INFO, "Device: " + config.dev_name);
     Logger::log(LogLevel::INFO, "Port: " + std::to_string(config.port));
-    Logger::log(LogLevel::INFO, "Local TUN IP: " + config.local_ip);
+    Logger::log(LogLevel::INFO, "Local TUN IP: " + config.local_tun_ip);
     Logger::log(LogLevel::INFO, "Remote TUN IP: " + config.remote_tun_ip);
     Logger::log(LogLevel::INFO, "Encryption: " + std::string(config.enable_encryption ? "Enabled" : "Disabled"));
     
@@ -194,6 +195,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    // Validate configuration
+    if (!validate_config(config)) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    // Check if running as root (only for actual operation, not help)
+    if (geteuid() != 0) {
+        Logger::log(LogLevel::ERROR, "This program must be run as root (use sudo)");
+        return 1;
+    }
+
     // Configure logging (simplified)
     if (config.log_level == "debug") {
         // Debug logging enabled
@@ -201,18 +214,6 @@ int main(int argc, char* argv[]) {
         // Warning level logging
     } else if (config.log_level == "error") {
         // Error level logging
-    }
-    
-    // Check if running as root (only for actual operation, not help)
-    if (geteuid() != 0) {
-        Logger::log(LogLevel::ERROR, "This program must be run as root (use sudo)");
-        return 1;
-    }
-    
-    // Validate configuration
-    if (!validate_config(config)) {
-        print_usage(argv[0]);
-        return 1;
     }
     
     // Print configuration
@@ -238,7 +239,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Configure TUN interface
-    if (!tun_manager.configure_interface(config.local_ip, config.remote_tun_ip)) {
+    if (!tun_manager.configure_interface(config.local_tun_ip, config.remote_tun_ip)) {
         Logger::log(LogLevel::ERROR, "Failed to configure TUN interface");
         return 1;
     }
