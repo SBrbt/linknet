@@ -94,6 +94,8 @@ private:
     bool generate_iv(uint8_t* iv);
     bool compute_hmac(const uint8_t* data, size_t data_len, 
                      const uint8_t* key, uint8_t* hmac);
+    bool compute_hmac(const uint8_t* data, size_t data_len, 
+                     const uint8_t* key, size_t key_len, uint8_t* hmac);
     bool constant_time_compare(const uint8_t* a, const uint8_t* b, size_t len);
     
     // Key derivation (PBKDF2)

@@ -81,22 +81,24 @@ bool CryptoManager::create_auth_request(char* buffer, size_t& buffer_size) {
         return false;
     }
     
-    // Derive keys using this salt
-    if (!derive_keys(salt, SALT_SIZE)) {
-        return false;
-    }
-    
-    // Generate IV and compute HMAC
+    // Generate IV 
     if (!generate_iv(header->iv)) {
         return false;
     }
     
-    if (!compute_hmac(salt, SALT_SIZE, hmac_key, header->hmac)) {
+    // Create HMAC using PSK directly (before key derivation)
+    // This allows server to verify without deriving keys first
+    if (!compute_hmac(salt, SALT_SIZE, (const uint8_t*)pre_shared_key.c_str(), pre_shared_key.length(), header->hmac)) {
+        return false;
+    }
+    
+    // Now derive keys using this salt for subsequent data encryption
+    if (!derive_keys(salt, SALT_SIZE)) {
         return false;
     }
     
     buffer_size = required_size;
-    Logger::log(LogLevel::DEBUG, "Created authentication request");
+    Logger::log(LogLevel::DEBUG, "Created authentication request with PSK verification");
     return true;
 }
 
@@ -113,19 +115,19 @@ bool CryptoManager::handle_auth_request(const char* buffer, size_t buffer_size,
     
     const uint8_t* salt = (const uint8_t*)(buffer + sizeof(EncryptedHeader));
     
-    // Derive keys using received salt
-    if (!derive_keys(salt, SALT_SIZE)) {
-        return false;
-    }
-    
-    // Verify HMAC
+    // Verify HMAC using PSK directly (before key derivation)
     uint8_t expected_hmac[HMAC_SIZE];
-    if (!compute_hmac(salt, SALT_SIZE, hmac_key, expected_hmac)) {
+    if (!compute_hmac(salt, SALT_SIZE, (const uint8_t*)pre_shared_key.c_str(), pre_shared_key.length(), expected_hmac)) {
         return false;
     }
     
     if (!constant_time_compare(header->hmac, expected_hmac, HMAC_SIZE)) {
-        Logger::log(LogLevel::WARNING, "Authentication failed: HMAC mismatch");
+        Logger::log(LogLevel::WARNING, "Authentication failed: PSK HMAC mismatch");
+        return false;
+    }
+    
+    // PSK verified! Now derive keys using received salt
+    if (!derive_keys(salt, SALT_SIZE)) {
         return false;
     }
     
@@ -145,8 +147,18 @@ bool CryptoManager::handle_auth_request(const char* buffer, size_t buffer_size,
         return false;
     }
     
-    // HMAC of empty data for success message
+    // HMAC of empty data for success message using derived HMAC key
     uint8_t empty_data = 0;
+    if (!compute_hmac(&empty_data, 0, hmac_key, resp_header->hmac)) {
+        return false;
+    }
+    
+    authenticated = true;
+    auth_time = std::chrono::steady_clock::now();
+    response_size = required_size;
+    
+    Logger::log(LogLevel::INFO, "PSK authentication successful (server) - keys synchronized");
+    return true;
     if (!compute_hmac(&empty_data, 0, hmac_key, resp_header->hmac)) {
         return false;
     }
@@ -390,6 +402,12 @@ bool CryptoManager::compute_hmac(const uint8_t* data, size_t data_len,
                                 const uint8_t* key, uint8_t* hmac) {
     unsigned int hmac_len;
     return HMAC(EVP_sha256(), key, AES_KEY_SIZE, data, data_len, hmac, &hmac_len) != NULL;
+}
+
+bool CryptoManager::compute_hmac(const uint8_t* data, size_t data_len, 
+                                const uint8_t* key, size_t key_len, uint8_t* hmac) {
+    unsigned int hmac_len;
+    return HMAC(EVP_sha256(), key, key_len, data, data_len, hmac, &hmac_len) != NULL;
 }
 
 bool CryptoManager::constant_time_compare(const uint8_t* a, const uint8_t* b, size_t len) {
