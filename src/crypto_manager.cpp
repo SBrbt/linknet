@@ -318,19 +318,20 @@ bool CryptoManager::wrap_data_packet(const char* data, size_t data_size,
     
     // Encrypt the data using the header IV
     char* encrypted_data = wrapped + sizeof(EncryptedHeader);
-    if (!encrypt_packet_with_iv(data, data_size, encrypted_data, encrypted_size, header->iv)) {
+    size_t actual_encrypted_size = encrypted_size;
+    if (!encrypt_packet_with_iv(data, data_size, encrypted_data, actual_encrypted_size, header->iv)) {
         return false;
     }
     
-    header->data_length = htonl(encrypted_size);
+    header->data_length = htonl(actual_encrypted_size);
     
     // Compute HMAC over encrypted data
-    if (!compute_hmac((const uint8_t*)encrypted_data, encrypted_size, 
+    if (!compute_hmac((const uint8_t*)encrypted_data, actual_encrypted_size, 
                      hmac_key, header->hmac)) {
         return false;
     }
     
-    wrapped_size = sizeof(EncryptedHeader) + encrypted_size;
+    wrapped_size = sizeof(EncryptedHeader) + actual_encrypted_size;
     return true;
 }
 
