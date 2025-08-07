@@ -141,15 +141,14 @@ bool CryptoManager::handle_auth_request(const char* buffer, size_t buffer_size,
     EncryptedHeader* resp_header = (EncryptedHeader*)response;
     resp_header->packet_type = (uint8_t)PacketType::AUTH_SUCCESS;
     memset(resp_header->reserved, 0, sizeof(resp_header->reserved));
-    resp_header->data_length = 0;
+    resp_header->data_length = htonl(0);
     
     if (!generate_iv(resp_header->iv)) {
         return false;
     }
     
     // HMAC of empty data for success message using derived HMAC key
-    uint8_t empty_data = 0;
-    if (!compute_hmac(&empty_data, 0, hmac_key, resp_header->hmac)) {
+    if (!compute_hmac(nullptr, 0, hmac_key, resp_header->hmac)) {
         return false;
     }
     
@@ -158,16 +157,6 @@ bool CryptoManager::handle_auth_request(const char* buffer, size_t buffer_size,
     response_size = required_size;
     
     Logger::log(LogLevel::INFO, "PSK authentication successful (server) - keys synchronized");
-    return true;
-    if (!compute_hmac(&empty_data, 0, hmac_key, resp_header->hmac)) {
-        return false;
-    }
-    
-    authenticated = true;
-    auth_time = std::chrono::steady_clock::now();
-    response_size = required_size;
-    
-    Logger::log(LogLevel::INFO, "Authentication successful (server)");
     return true;
 }
 
@@ -184,8 +173,7 @@ bool CryptoManager::handle_auth_response(const char* buffer, size_t buffer_size)
     
     // Verify HMAC
     uint8_t expected_hmac[HMAC_SIZE];
-    uint8_t empty_data = 0;
-    if (!compute_hmac(&empty_data, 0, hmac_key, expected_hmac)) {
+    if (!compute_hmac(nullptr, 0, hmac_key, expected_hmac)) {
         return false;
     }
     
@@ -207,14 +195,22 @@ bool CryptoManager::encrypt_packet(const char* plaintext, size_t plaintext_size,
         return false;
     }
     
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
+    uint8_t iv[AES_IV_SIZE];
+    if (!generate_iv(iv)) {
         return false;
     }
     
-    uint8_t iv[AES_IV_SIZE];
-    if (!generate_iv(iv)) {
-        EVP_CIPHER_CTX_free(ctx);
+    return encrypt_packet_with_iv(plaintext, plaintext_size, ciphertext, ciphertext_size, iv);
+}
+
+bool CryptoManager::encrypt_packet_with_iv(const char* plaintext, size_t plaintext_size,
+                                          char* ciphertext, size_t& ciphertext_size, const uint8_t* iv) {
+    if (!authenticated) {
+        return false;
+    }
+    
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
         return false;
     }
     
@@ -226,25 +222,22 @@ bool CryptoManager::encrypt_packet(const char* plaintext, size_t plaintext_size,
     int len;
     int ciphertext_len = 0;
     
-    // Encrypt the data
-    if (EVP_EncryptUpdate(ctx, (unsigned char*)ciphertext + AES_IV_SIZE, &len,
+    // Encrypt the data (don't prepend IV, caller handles it)
+    if (EVP_EncryptUpdate(ctx, (unsigned char*)ciphertext, &len,
                          (const unsigned char*)plaintext, plaintext_size) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
     ciphertext_len = len;
     
-    if (EVP_EncryptFinal_ex(ctx, (unsigned char*)ciphertext + AES_IV_SIZE + len, &len) != 1) {
+    if (EVP_EncryptFinal_ex(ctx, (unsigned char*)ciphertext + len, &len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
     ciphertext_len += len;
     
     EVP_CIPHER_CTX_free(ctx);
-    
-    // Prepend IV
-    memcpy(ciphertext, iv, AES_IV_SIZE);
-    ciphertext_size = AES_IV_SIZE + ciphertext_len;
+    ciphertext_size = ciphertext_len;
     
     return true;
 }
@@ -255,14 +248,23 @@ bool CryptoManager::decrypt_packet(const char* ciphertext, size_t ciphertext_siz
         return false;
     }
     
+    const uint8_t* iv = (const uint8_t*)ciphertext;
+    const uint8_t* encrypted_data = (const uint8_t*)ciphertext + AES_IV_SIZE;
+    size_t encrypted_size = ciphertext_size - AES_IV_SIZE;
+    
+    return decrypt_packet_with_iv((const char*)encrypted_data, encrypted_size, plaintext, plaintext_size, iv);
+}
+
+bool CryptoManager::decrypt_packet_with_iv(const char* ciphertext, size_t ciphertext_size,
+                                          char* plaintext, size_t& plaintext_size, const uint8_t* iv) {
+    if (!authenticated) {
+        return false;
+    }
+    
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         return false;
     }
-    
-    const uint8_t* iv = (const uint8_t*)ciphertext;
-    const uint8_t* encrypted_data = (const uint8_t*)ciphertext + AES_IV_SIZE;
-    size_t encrypted_size = ciphertext_size - AES_IV_SIZE;
     
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, aes_key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
@@ -273,7 +275,7 @@ bool CryptoManager::decrypt_packet(const char* ciphertext, size_t ciphertext_siz
     int plaintext_len = 0;
     
     if (EVP_DecryptUpdate(ctx, (unsigned char*)plaintext, &len,
-                         encrypted_data, encrypted_size) != 1) {
+                         (const unsigned char*)ciphertext, ciphertext_size) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
@@ -309,28 +311,26 @@ bool CryptoManager::wrap_data_packet(const char* data, size_t data_size,
     header->packet_type = (uint8_t)PacketType::DATA_PACKET;
     memset(header->reserved, 0, sizeof(header->reserved));
     
-    // Encrypt the data
-    char* encrypted_data = wrapped + sizeof(EncryptedHeader);
-    size_t actual_encrypted_size = encrypted_size;
-    
-    if (!encrypt_packet(data, data_size, encrypted_data, actual_encrypted_size)) {
-        return false;
-    }
-    
-    header->data_length = htonl(actual_encrypted_size);
-    
-    // Generate IV for header
+    // Generate IV for this packet
     if (!generate_iv(header->iv)) {
         return false;
     }
     
+    // Encrypt the data using the header IV
+    char* encrypted_data = wrapped + sizeof(EncryptedHeader);
+    if (!encrypt_packet_with_iv(data, data_size, encrypted_data, encrypted_size, header->iv)) {
+        return false;
+    }
+    
+    header->data_length = htonl(encrypted_size);
+    
     // Compute HMAC over encrypted data
-    if (!compute_hmac((const uint8_t*)encrypted_data, actual_encrypted_size, 
+    if (!compute_hmac((const uint8_t*)encrypted_data, encrypted_size, 
                      hmac_key, header->hmac)) {
         return false;
     }
     
-    wrapped_size = sizeof(EncryptedHeader) + actual_encrypted_size;
+    wrapped_size = sizeof(EncryptedHeader) + encrypted_size;
     return true;
 }
 
@@ -364,8 +364,8 @@ bool CryptoManager::unwrap_data_packet(const char* wrapped, size_t wrapped_size,
         return false;
     }
     
-    // Decrypt the data
-    return decrypt_packet(encrypted_data, encrypted_size, data, data_size);
+    // Decrypt the data using IV from header
+    return decrypt_packet_with_iv(encrypted_data, encrypted_size, data, data_size, header->iv);
 }
 
 bool CryptoManager::needs_reauth() const {

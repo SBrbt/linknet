@@ -11,6 +11,7 @@
 // Crypto constants
 #define AES_KEY_SIZE 32      // AES-256
 #define AES_IV_SIZE 16       // AES block size
+#define AES_BLOCK_SIZE 16    // AES block size for padding
 #define AUTH_KEY_SIZE 64     // Pre-shared key size
 #define HMAC_SIZE 32         // SHA-256 HMAC size
 #define SALT_SIZE 16         // Salt for key derivation
@@ -70,8 +71,12 @@ public:
     // Encryption/Decryption
     bool encrypt_packet(const char* plaintext, size_t plaintext_size,
                        char* ciphertext, size_t& ciphertext_size);
+    bool encrypt_packet_with_iv(const char* plaintext, size_t plaintext_size,
+                               char* ciphertext, size_t& ciphertext_size, const uint8_t* iv);
     bool decrypt_packet(const char* ciphertext, size_t ciphertext_size,
                        char* plaintext, size_t& plaintext_size);
+    bool decrypt_packet_with_iv(const char* ciphertext, size_t ciphertext_size,
+                               char* plaintext, size_t& plaintext_size, const uint8_t* iv);
     
     // Packet handling
     bool wrap_data_packet(const char* data, size_t data_size,
